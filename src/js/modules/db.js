@@ -90,7 +90,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mj
                         const result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
                         text = result.value;
                     } else {
-                        alert(`Unsupported file type: ${ext}`);
+                        window.showToast(`Unsupported file type: ${ext}`, "error");
                         continue;
                     }
                     
@@ -101,7 +101,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mj
                     }
                 } catch (e) {
                     console.error("Error processing file", file.name, e);
-                    alert(`Failed to process ${file.name}: ${e.message}`);
+                    window.showToast(`Failed to process ${file.name}: ${e.message}`, "error");
                 }
             }
 
@@ -109,7 +109,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mj
                 const knInput = document.getElementById('edit-knowledge');
                 knInput.value = knInput.value + `\n\n> Note: ${processedCount} file(s) have been uploaded to internal DOM storage. Their contents will be automatically appended to the context.`;
                 updateAspectData('knowledge', knInput.value);
-                alert(`Successfully processed and saved ${processedCount} file(s) to internal storage.`);
+                window.showToast(`Successfully processed and saved ${processedCount} file(s) to internal storage.`);
             }
             event.target.value = '';
         }

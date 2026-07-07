@@ -22,6 +22,14 @@ import { state } from './state.js';
             localStorage.setItem('model', state.settings.model);
             localStorage.setItem('maxContext', state.settings.maxContext);
             
+            const isDarkMode = document.getElementById('dark-mode-toggle').checked;
+            localStorage.setItem('darkMode', isDarkMode);
+            if (isDarkMode) {
+                document.body.classList.add('dark-theme');
+            } else {
+                document.body.classList.remove('dark-theme');
+            }
+            
             document.getElementById('settings-modal').classList.add('hidden');
         }
 

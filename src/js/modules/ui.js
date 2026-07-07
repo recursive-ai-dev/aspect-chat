@@ -8,6 +8,21 @@ import { systemTools } from './systemTools.js';
 import { state } from './state.js';
 
 
+        export function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            if (!container) return;
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.innerText = message;
+            container.appendChild(toast);
+            setTimeout(() => {
+                if (toast.parentElement) {
+                    toast.remove();
+                }
+            }, 3500); // Wait for animations to finish
+        }
+        window.showToast = showToast;
+
         export function markChangesUnsaved() {
             state.hasUnsavedChanges = true;
             document.getElementById('save-reminder').classList.remove('hidden');

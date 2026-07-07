@@ -79,7 +79,7 @@ export function saveToolCode() {
     const code = editorView.state.doc.toString();
     
     if (!name) {
-        alert("Tool name is required.");
+        window.showToast("Tool name is required.", "error");
         return;
     }
     

@@ -175,7 +175,7 @@ import { state } from './state.js';
 
         export function deleteCurrentAspect() {
             if (state.aspects.length <= 1) {
-                alert("You must keep at least one Aspect. Create a new one before deleting this one.");
+                window.showToast("You must keep at least one Aspect. Create a new one before deleting this one.", "error");
                 return;
             }
             if (confirm("Are you sure you want to delete this Aspect? All history and tools will be lost.")) {

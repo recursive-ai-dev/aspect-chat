@@ -5,7 +5,7 @@ import { acceptCreateAspect } from './modules/aspects.js';
 import { loadAspectFile } from './modules/zip.js';
 import { getLakesideSageIcon } from './modules/aspects.js';
 import { sendAIRequest } from './modules/tools.js';
-import { saveAspectToFile } from './modules/zip.js';
+import { saveAspectToFile, exportAspectToWebpage } from './modules/zip.js';
 import { updateAspectData } from './modules/aspects.js';
 import { uploadKnowledgeFiles } from './modules/db.js';
 import { getKnowledgeFilesText } from './modules/db.js';
@@ -100,6 +100,7 @@ window.processAIResponseAndTools = processAIResponseAndTools;
 window.sendAIRequest = sendAIRequest;
 window.sendMessage = sendMessage;
 window.saveAspectToFile = saveAspectToFile;
+window.exportAspectToWebpage = exportAspectToWebpage;
 window.loadAspectFile = loadAspectFile;
 window.openSystemToolsModal = openSystemToolsModal;
 

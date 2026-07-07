@@ -206,9 +206,78 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
                 markChangesSaved();
 
             } catch (err) {
-                alert(`Error loading .aspect file: ${err.message}`);
-                console.error(err);
+                console.error("Error loading .aspect file", err);
+                window.showToast(`Error loading .aspect file: ${err.message}`, "error");
             } finally {
                 event.target.value = '';
-            }
+        }
+
+        export async function exportAspectToWebpage() {
+            const aspect = getCurrentAspect();
+            if (!aspect) return;
+
+            const htmlContent = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${aspect.name} - Aspect Card</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5ece1;
+            color: #3d2f26;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+        .card {
+            background: #fff;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            max-width: 600px;
+            width: 100%;
+            padding: 40px;
+            text-align: center;
+        }
+        .icon {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 4px solid #597d53;
+            margin-bottom: 20px;
+        }
+        h1 { margin: 0 0 10px 0; color: #cc6d4e; }
+        p.desc { font-size: 1.2rem; color: #7c685b; margin-bottom: 30px; }
+        .details { text-align: left; background: #f9f9f9; padding: 20px; border-radius: 8px; font-size: 0.95rem; line-height: 1.5; white-space: pre-wrap; }
+        .badge { display: inline-block; background: #597d53; color: white; padding: 5px 12px; border-radius: 20px; font-size: 0.8rem; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <img class="icon" src="${aspect.icon || ''}" alt="Aspect Icon">
+        <h1>${aspect.name}</h1>
+        <p class="desc">${aspect.description}</p>
+        <div class="details">
+            <strong>System Prompt / Instructions:</strong><br><br>
+            ${aspect.instructions.replace(/</g, "&lt;").replace(/>/g, "&gt;")}
+        </div>
+        <div class="badge">Created with Aspect Studio</div>
+    </div>
+</body>
+</html>`;
+
+            const blob = new Blob([htmlContent], { type: 'text/html' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${aspect.name.replace(/[^a-zA-Z0-9]/g, '_')}_card.html`;
+            a.click();
+            URL.revokeObjectURL(url);
+            
+            window.showToast("Webpage Exported Successfully!", "success");
         }

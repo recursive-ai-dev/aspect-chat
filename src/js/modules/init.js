@@ -17,6 +17,15 @@ import { marked } from 'marked';
                 fetchModelsIfPossible();
             }
             
+            // Dark Mode Initialization
+            const isDarkMode = localStorage.getItem('darkMode') === 'true';
+            document.getElementById('dark-mode-toggle').checked = isDarkMode;
+            if (isDarkMode) {
+                document.body.classList.add('dark-theme');
+                const slider = document.getElementById('dark-mode-slider');
+                if (slider) slider.style.transform = 'translateX(22px)';
+            }
+            
             marked.setOptions({
                 breaks: true,
                 gfm: true
