@@ -1,0 +1,228 @@
+import { insertToolTag } from './tools.js';
+import { renderChatMessages } from './chat.js';
+import { getGenericIcon } from './aspects.js';
+import { saveAspectsToLocalStorage } from './state.js';
+import { renderAspectList } from './aspects.js';
+import { getCurrentAspect } from './aspects.js';
+import { state } from './state.js';
+
+
+        export function markChangesUnsaved() {
+            state.hasUnsavedChanges = true;
+            document.getElementById('save-reminder').classList.remove('hidden');
+            document.getElementById('sidebar-save-btn').classList.add('pulsate');
+            saveAspectsToLocalStorage();
+        }
+
+        export function nextPage(page) {
+            document.querySelectorAll('.modal-page').forEach(p => p.classList.remove('active'));
+            document.getElementById('page-' + page).classList.add('active');
+        }
+        export function closeWelcomeModal() {
+            document.getElementById('welcome-modal').style.display = 'none';
+        }
+
+        export function showEditorView() {
+            const aspect = getCurrentAspect();
+            if (!aspect) return;
+
+            document.getElementById('editor-view').classList.remove('hidden');
+            document.getElementById('chat-view').classList.add('hidden');
+
+            document.getElementById('edit-name').value = aspect.name;
+            document.getElementById('edit-desc').value = aspect.description;
+            document.getElementById('edit-instructions').value = aspect.instructions;
+            document.getElementById('edit-knowledge').value = aspect.knowledge;
+            
+            document.getElementById('icon-preview').src = aspect.icon || getGenericIcon();
+            document.getElementById('icon-filename').innerText = aspect.icon ? 'Custom icon loaded' : 'No icon uploaded';
+            
+            const toolsList = document.getElementById('tools-list');
+            if(aspect.tools && aspect.tools.length > 0) {
+                toolsList.innerText = aspect.tools.map(t => t.name).join(', ');
+            } else {
+                toolsList.innerText = 'No tools uploaded';
+            }
+
+            renderPresetBgGrid();
+            
+            const bgFilename = document.getElementById('bg-filename');
+            if (aspect.background) {
+                if (aspect.background.startsWith('data:')) {
+                    bgFilename.innerText = "Custom background loaded";
+                } else {
+                    bgFilename.innerText = `Preset: ${aspect.background.split('/').pop()}`;
+                }
+            } else {
+                bgFilename.innerText = "No background chosen";
+            }
+        }
+
+        export function showChatView() {
+            const aspect = getCurrentAspect();
+            if (!aspect) return;
+
+            document.getElementById('editor-view').classList.add('hidden');
+            document.getElementById('chat-view').classList.remove('hidden');
+
+            applyAspectBackground();
+
+            document.getElementById('chat-aspect-icon').src = aspect.icon || getGenericIcon();
+            document.getElementById('chat-aspect-name').innerText = aspect.name;
+            document.getElementById('chat-aspect-desc').innerText = aspect.description;
+
+            // Populate tools dropdown
+            const dropdown = document.getElementById('tools-dropdown');
+            dropdown.innerHTML = '<div class="dropdown-item" onclick="insertToolTag(\'RunAll\')">Run All Tools</div>';
+            if (aspect.tools) {
+                aspect.tools.forEach(tool => {
+                    const item = document.createElement('div');
+                    item.className = 'dropdown-item';
+                    item.innerText = tool.name;
+                    item.onclick = () => insertToolTag(tool.name);
+                    dropdown.appendChild(item);
+                });
+            }
+
+            renderChatMessages();
+        }
+
+        // --- FILE UPLOADS (ICON & TOOLS) ---
+        export function uploadIcon(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const aspect = getCurrentAspect();
+                if (aspect) {
+                    aspect.icon = e.target.result;
+                    document.getElementById('icon-preview').src = e.target.result;
+                    document.getElementById('icon-filename').innerText = file.name;
+                    renderAspectList();
+                    markChangesUnsaved();
+                }
+            };
+            reader.readAsDataURL(file);
+        }
+
+        export function uploadTools(event) {
+            const files = Array.from(event.target.files);
+            const aspect = getCurrentAspect();
+            if (!aspect) return;
+            
+            let loadedCount = 0;
+            files.forEach(file => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const existingIdx = aspect.tools.findIndex(t => t.name === file.name);
+                    if (existingIdx !== -1) {
+                        aspect.tools[existingIdx].code = e.target.result;
+                    } else {
+                        aspect.tools.push({
+                            name: file.name,
+                            code: e.target.result
+                        });
+                    }
+                    loadedCount++;
+                    if (loadedCount === files.length) {
+                        document.getElementById('tools-list').innerText = aspect.tools.map(t => t.name).join(', ');
+                        markChangesUnsaved();
+                    }
+                };
+                reader.readAsText(file);
+            });
+        }
+
+        // --- BACKGROUND PACK SELECTION & CONFIGURATION ---
+        const PRESET_BACKGROUNDS = [
+            { name: "Lake Sunset 1", file: "lake_sunset_001.jpeg" },
+            { name: "Lake Sunset 2", file: "lake_sunset_002.jpeg" },
+            { name: "Mountains Dusk 1", file: "mountains_dusk_001.jpeg" },
+            { name: "Mountains Dusk 2", file: "mountains_dusk_002.jpeg" },
+            { name: "Mountains Late Night 1", file: "mountains_late_night_001.jpeg" },
+            { name: "Mountains Late Night 2", file: "mountains_late_night_002.jpeg" },
+            { name: "Mountains Morning 1", file: "mountains_morning_001.jpeg" },
+            { name: "Mountains Morning 2", file: "mountains_morning_002.jpeg" },
+            { name: "Mountains Rain 1", file: "mountains_rain_001.jpeg" },
+            { name: "Mountains Rain 2", file: "mountains_rain_002.jpeg" },
+            { name: "Mountains Snow 1", file: "mountains_snow_001.jpeg" },
+            { name: "Mountains Snow 2", file: "mountains_snow_002.jpeg" },
+            { name: "Valley Dusk 1", file: "valley_dusk_001.jpeg" },
+            { name: "Valley Dusk 2", file: "valley_dusk_002.jpeg" }
+        ];
+
+        export function applyAspectBackground() {
+            const aspect = getCurrentAspect();
+            if (!aspect) return;
+            
+            let bgUrl = '';
+            if (aspect.background) {
+                if (aspect.background.startsWith('data:')) {
+                    bgUrl = `url("${aspect.background}")`;
+                } else {
+                    bgUrl = `url("./${aspect.background}")`;
+                }
+            } else {
+                bgUrl = 'linear-gradient(135deg, #f5ece1 0%, #e8dec8 100%)';
+            }
+            document.body.style.backgroundImage = bgUrl;
+        }
+
+        export function renderPresetBgGrid() {
+            const grid = document.getElementById('preset-bg-grid');
+            if (!grid) return;
+            grid.innerHTML = '';
+            
+            const aspect = getCurrentAspect();
+            
+            PRESET_BACKGROUNDS.forEach(preset => {
+                const item = document.createElement('div');
+                const path = `alone_image_pack/${preset.file}`;
+                const isActive = aspect && aspect.background === path;
+                
+                item.style.cssText = `
+                    border: 3px solid ${isActive ? 'var(--accent-secondary)' : 'var(--border-color)'};
+                    border-radius: 8px;
+                    overflow: hidden;
+                    cursor: pointer;
+                    height: 50px;
+                    background-image: url('./${path}');
+                    background-size: cover;
+                    background-position: center;
+                    box-shadow: ${isActive ? '0 0 6px var(--accent-secondary)' : 'none'};
+                    position: relative;
+                    transition: border-color 0.15s, box-shadow 0.15s;
+                `;
+                item.title = preset.name;
+                item.onclick = () => selectPresetBackground(path);
+                grid.appendChild(item);
+            });
+        }
+
+        export function selectPresetBackground(path) {
+            const aspect = getCurrentAspect();
+            if (aspect) {
+                aspect.background = path;
+                document.getElementById('bg-filename').innerText = `Preset: ${path.split('/').pop()}`;
+                renderPresetBgGrid();
+                applyAspectBackground();
+                markChangesUnsaved();
+            }
+        }
+
+        export function uploadBackground(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const aspect = getCurrentAspect();
+                if (aspect) {
+                    aspect.background = e.target.result;
+                    document.getElementById('bg-filename').innerText = `Custom: ${file.name}`;
+                    renderPresetBgGrid();
+                    applyAspectBackground();
+                    markChangesUnsaved();
+                }
+            };
+            reader.readAsDataURL(file);
+        }

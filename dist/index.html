@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aspect Studio - AI Persona Workshop</title>
+    <!-- Google Fonts for that cartoony, classic book feel -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Balsamiq+Sans:wght@400;700&family=Patrick+Hand&display=swap" rel="stylesheet">
+  <script type="module" crossorigin src="/assets/index-CMnmD2k-.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-D-C96luB.css">
+</head>
+<body>
+
+    <!-- WELCOME MODAL -->
+    <div id="welcome-modal">
+        <div class="modal-content">
+            <button class="close-modal-btn" onclick="closeWelcomeModal()">✕</button>
+            <div class="modal-page active" id="page-1">
+                <h2>Welcome to Aspect Studio! 🌸</h2>
+                <p>Aspects are custom AI personas. You can define their name, personality, knowledge bank, and even load custom JavaScript tools they can run autonomously during chat!</p>
+                <div class="modal-nav-btns">
+                    <button class="save-btn" onclick="nextPage(2)">Next Tour ➔</button>
+                </div>
+            </div>
+            <div class="modal-page" id="page-2">
+                <h2>How to Set Up ⚙️</h2>
+                <p>1. <b>API Settings:</b> Click the Gear icon in the sidebar to enter your model's endpoint, model name, and API Key.<br>
+                   2. <b>Create Aspect:</b> Click "+ New Aspect" to start sketching out a persona.<br>
+                   3. <b>Customize:</b> Add custom instructions (system prompt), knowledge articles, and custom script tools.</p>
+                <div class="modal-nav-btns">
+                    <button class="settings-btn" onclick="nextPage(1)">Back</button>
+                    <button class="save-btn" onclick="nextPage(3)">Next ➔</button>
+                </div>
+            </div>
+            <div class="modal-page" id="page-3">
+                <h2>Persistence & Saving 💾</h2>
+                <p>This is a local browser app. All changes are saved temporarily in your local storage, but to keep your Aspects permanent, <strong>click the Download button</strong> to export your setup as a <code>.aspect</code> file! You can upload it later using "Upload .aspect".</p>
+                <div class="modal-nav-btns">
+                    <button class="settings-btn" onclick="nextPage(2)">Back</button>
+                    <button class="save-btn" onclick="closeWelcomeModal()">Get Started! 🌲</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- SETTINGS MODAL -->
+    <div id="settings-modal" class="hidden" style="position: fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); display:flex; justify-content:center; align-items:center; z-index: 50; backdrop-filter: blur(4px);">
+        <div class="modal-content" style="max-width: 440px; text-align: left; padding-top: 30px;">
+            <button class="close-modal-btn" onclick="document.getElementById('settings-modal').classList.add('hidden')">✕</button>
+            <h2 style="font-family: 'Patrick Hand', cursive; font-size: 2.2rem; text-align: center; color: var(--accent-secondary-dark);">API Settings</h2>
+            <div class="settings-form">
+                <label>Service Provider Template</label>
+                <select id="api-provider-select" onchange="onProviderSelect()" style="padding: 10px; border: 3px solid var(--border-color); border-radius: 8px; font-family: 'Balsamiq Sans', cursive; font-size: 0.95rem; background: var(--bg-input);">
+                    <option value="custom">Custom</option>
+                    <option value="https://api.cohere.ai/v1">Cohere</option>
+                    <option value="https://api.groq.com/openai/v1">Groq</option>
+                    <option value="https://api.cerebras.ai/v1">Cerebras</option>
+                    <option value="https://openrouter.ai/api/v1">OpenRouter</option>
+                    <option value="https://api.arliai.com/v1">ArliAI</option>
+                    <option value="http://localhost:1234/v1">Local / Network-Agnostic (LM Studio)</option>
+                </select>
+                <label>API Endpoint URL</label>
+                <input type="text" id="api-url-input" placeholder="https://api.openai.com/v1" oninput="fetchModelsIfPossible()">
+                <label>API Key</label>
+                <input type="password" id="api-key-input" placeholder="sk-..." oninput="fetchModelsIfPossible()">
+                <label>Model Name</label>
+                <input type="text" id="api-model-input" placeholder="gpt-4o">
+                <select id="api-model-select" class="hidden" onchange="onModelSelectDropdown()" style="padding: 10px; border: 3px solid var(--border-color); border-radius: 8px; font-family: 'Balsamiq Sans', cursive; font-size: 0.95rem; background: var(--bg-input);"></select>
+                <div id="model-fetch-status" style="font-size: 0.85rem; color: var(--text-light); margin-top: -8px;"></div>
+            </div>
+            <div class="modal-nav-btns" style="margin-top: 25px;">
+                <button class="save-btn" onclick="saveSettings()">Save Configuration</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- CREATE ASPECT MODAL -->
+    <div id="create-aspect-modal" class="hidden" style="position: fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); display:flex; justify-content:center; align-items:center; z-index: 50; backdrop-filter: blur(4px);">
+        <div class="modal-content" style="max-width: 440px; text-align: left; padding-top: 30px;">
+            <button class="close-modal-btn" onclick="cancelCreateAspect()">✕</button>
+            <h2 style="font-family: 'Patrick Hand', cursive; font-size: 2.2rem; text-align: center; color: var(--accent-secondary-dark);">Create New Aspect</h2>
+            <div class="settings-form">
+                <label>Aspect Name</label>
+                <input type="text" id="create-aspect-name-input" placeholder="New Aspect">
+                
+                <label>User-Facing Description</label>
+                <input type="text" id="create-aspect-desc-input" placeholder="A brand new persona.">
+                
+                <label>Aspect Icon (Optional)</label>
+                <div class="icon-preview-container">
+                    <img id="create-aspect-icon-preview" src="" alt="Icon" style="width:64px;height:64px;border-radius:12px;object-fit:cover;border:3px solid var(--border-color);">
+                    <div>
+                        <input type="file" id="create-aspect-icon-input" accept="image/*" class="hidden" onchange="uploadCreateIcon(event)">
+                        <button class="settings-btn" onclick="document.getElementById('create-aspect-icon-input').click()" style="margin-bottom: 5px; font-size: 0.9rem; padding: 6px 12px; width: auto; display: inline-block;">📂 Upload Icon</button>
+                        <div class="file-list" id="create-aspect-icon-filename">No icon uploaded</div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-nav-btns" style="margin-top: 25px;">
+                <button class="settings-btn danger-btn" onclick="cancelCreateAspect()">Cancel / Remove</button>
+                <button class="save-btn" onclick="acceptCreateAspect()">Accept / Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SIDEBAR -->
+    <div id="sidebar">
+        <h1 id="app-title">Aspect Studio</h1>
+        <button class="settings-btn" onclick="openSettings()">⚙️ API Settings</button>
+        <button class="settings-btn" onclick="document.getElementById('upload-aspect-input').click()">📂 Upload .aspect</button>
+        <input type="file" id="upload-aspect-input" accept=".aspect" class="hidden" onchange="loadAspectFile(event)">
+        
+        <button id="sidebar-save-btn" class="settings-btn save-btn-sidebar" onclick="saveAspectToFile()">💾 Download .aspect</button>
+        
+        <div id="aspect-list">
+            <!-- Aspects populated here -->
+        </div>
+    </div>
+
+    <!-- MAIN AREA -->
+    <div id="main-area">
+        
+        <!-- SAVE REMINDER BANNER -->
+        <div id="save-reminder" class="save-reminder-banner hidden">
+            <span>🌸 Unsaved changes detected! Make sure to download your .aspect file.</span>
+            <button onclick="saveAspectToFile()">💾 Download Now</button>
+        </div>
+        
+        <!-- EDITOR VIEW -->
+        <div id="editor-view" class="hidden">
+            <div class="editor-header">
+                <h2>Editing Aspect</h2>
+                <div style="display: flex; gap: 10px;">
+                    <button class="settings-btn danger-btn" onclick="deleteCurrentAspect()" style="margin-bottom:0;">🗑️ Delete</button>
+                    <button class="save-btn" onclick="saveAspectToFile()">💾 Save Aspect</button>
+                </div>
+            </div>
+            
+            <div class="editor-grid">
+                <div>
+                    <div class="editor-field">
+                        <label>Aspect Name</label>
+                        <input type="text" id="edit-name" oninput="updateAspectData('name', this.value)">
+                    </div>
+                    
+                    <div class="editor-field">
+                        <label>User-Facing Description</label>
+                        <textarea id="edit-desc" oninput="updateAspectData('description', this.value)" placeholder="A short description shown to the user..."></textarea>
+                    </div>
+
+                    <div class="editor-field">
+                        <label>Aspect Icon (512x512 PNG/JPG)</label>
+                        <div class="icon-preview-container">
+                            <img id="icon-preview" src="" alt="Icon">
+                            <div>
+                                <input type="file" accept="image/*" onchange="uploadIcon(event)">
+                                <div class="file-list" id="icon-filename">No icon uploaded</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="editor-field">
+                        <label>Aspect Chat Background</label>
+                        <div style="border: 3px solid var(--border-color); padding: 12px; border-radius: 12px; background: var(--bg-input);">
+                            <p style="font-size: 0.9rem; margin-bottom: 10px; color: var(--text-light);">Select a preset background or upload a custom one.</p>
+                            <button class="settings-btn" onclick="document.getElementById('upload-bg-input').click()" style="margin-bottom: 12px; font-size: 0.95rem; padding: 6px 12px; width: auto; display: inline-block;">📂 Upload Background</button>
+                            <input type="file" id="upload-bg-input" accept="image/jpeg, image/png" class="hidden" onchange="uploadBackground(event)">
+                            <div class="file-list" id="bg-filename" style="margin-bottom: 10px; font-weight: bold; color: var(--accent-primary);">No background chosen</div>
+                            <div id="preset-bg-grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; max-height: 160px; overflow-y: auto; padding-right: 5px;">
+                                <!-- Preset backgrounds dynamically injected -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <div class="editor-field">
+                        <label>System Instructions (Persona Prompt)</label>
+                        <textarea id="edit-instructions" style="min-height: 120px;" oninput="updateAspectData('instructions', this.value)" placeholder="The system instructions given to the AI before every response..."></textarea>
+                    </div>
+
+                    <div class="editor-field">
+                        <label>Knowledge Bank (Markdown)</label>
+                        <textarea id="edit-knowledge" style="min-height: 120px;" oninput="updateAspectData('knowledge', this.value)" placeholder="Reference material the AI can consult..."></textarea>
+                        <div style="margin-top: 10px; text-align: center;">
+                            <button class="settings-btn" onclick="document.getElementById('upload-knowledge-input').click()" style="margin: 0 auto; display: inline-block; width: auto; font-size: 0.9rem; padding: 5px 10px;">📂 Upload Files (.txt, .md, .pdf, .docx)</button>
+                            <input type="file" id="upload-knowledge-input" accept=".txt,.md,.pdf,.docx" multiple class="hidden" onchange="uploadKnowledgeFiles(event)">
+                        </div>
+                    </div>
+
+                    <div class="editor-field">
+                        <label>Injectable JS Tools</label>
+                        <div style="border: 2px dashed var(--border-color); padding: 15px; border-radius: 12px; text-align: center; background: var(--bg-input);">
+                            <p style="font-size: 0.9rem; margin-bottom: 10px; color: var(--text-light);">Upload custom `.js` script files. Tools must define an `async function executeTool(args)` function.</p>
+                            <button class="settings-btn" onclick="document.getElementById('upload-tools-input').click()" style="margin: 0 auto; display: block; width: auto;">📂 Upload .js files</button>
+                            <input type="file" id="upload-tools-input" accept=".js" multiple class="hidden" onchange="uploadTools(event)">
+                            <div class="file-list" id="tools-list" style="margin-top: 10px; font-weight: bold; color: var(--accent-primary);">No tools uploaded</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CHAT VIEW -->
+        <div id="chat-view" class="hidden">
+            <div class="chat-sidebar">
+                <img id="chat-aspect-icon" src="" alt="Aspect Icon">
+                <h3 id="chat-aspect-name"></h3>
+                <p id="chat-aspect-desc"></p>
+                <button class="edit-aspect-btn" onclick="showEditorView()">✏️ Edit Aspect</button>
+            </div>
+            
+            <div class="chat-main">
+                <div id="chat-messages">
+                    <!-- Messages populated here -->
+                </div>
+                
+                <div class="chat-input-area">
+                    <div class="tools-dropdown-wrapper">
+                        <button id="tools-btn" onclick="toggleToolsDropdown()">🛠️ Tools</button>
+                        <div id="tools-dropdown" class="dropdown-menu">
+                            <div class="dropdown-item" onclick="insertToolTag('RunAll')">Run All Tools</div>
+                            <!-- Dynamic tools injected here -->
+                        </div>
+                    </div>
+                    <textarea id="chat-input" placeholder="Type your message..." rows="1" onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); sendMessage();}"></textarea>
+                    <button id="send-btn" onclick="sendMessage()">Send</button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+</body>
+</html>
