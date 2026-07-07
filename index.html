@@ -106,6 +106,32 @@
         </div>
     </div>
 
+    <!-- TOOL EDITOR MODAL -->
+    <div id="tool-editor-modal" class="hidden" style="position: fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); display:flex; justify-content:center; align-items:center; z-index: 60; backdrop-filter: blur(4px);">
+        <div class="modal-content" style="width: 90%; max-width: 800px; height: 80vh; display: flex; flex-direction: column; text-align: left; padding: 20px;">
+            <button class="close-modal-btn" onclick="closeToolEditor()">✕</button>
+            <h2 style="font-family: 'Patrick Hand', cursive; font-size: 2.2rem; margin-bottom: 10px; color: var(--accent-secondary-dark);">Edit Tool</h2>
+            <input type="text" id="tool-editor-name" placeholder="ToolName.js" style="margin-bottom: 15px; font-size: 1.1rem; padding: 8px; border-radius: 8px; border: 2px solid var(--border-color);">
+            <div id="codemirror-container" style="flex: 1; border: 3px solid var(--border-color); border-radius: 12px; overflow: hidden; background: #282c34;"></div>
+            <div class="modal-nav-btns" style="margin-top: 20px;">
+                <button class="settings-btn danger-btn" onclick="closeToolEditor()">Cancel</button>
+                <button class="save-btn" onclick="saveToolCode()">Save Tool</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SYSTEM TOOLS MODAL -->
+    <div id="system-tools-modal" class="hidden" style="position: fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); display:flex; justify-content:center; align-items:center; z-index: 60; backdrop-filter: blur(4px);">
+        <div class="modal-content" style="max-width: 500px; text-align: left; padding-top: 30px;">
+            <button class="close-modal-btn" onclick="document.getElementById('system-tools-modal').classList.add('hidden')">✕</button>
+            <h2 style="font-family: 'Patrick Hand', cursive; font-size: 2.2rem; text-align: center; color: var(--accent-secondary-dark);">System Tools</h2>
+            <p style="text-align: center; margin-bottom: 15px;">Add pre-built safe tools to your Aspect.</p>
+            <div id="system-tools-list" style="display: flex; flex-direction: column; gap: 10px;">
+                <!-- System tools injected here -->
+            </div>
+        </div>
+    </div>
+
     <!-- SIDEBAR -->
     <div id="sidebar">
         <h1 id="app-title">Aspect Studio</h1>
@@ -194,10 +220,16 @@
                     <div class="editor-field">
                         <label>Injectable JS Tools</label>
                         <div style="border: 2px dashed var(--border-color); padding: 15px; border-radius: 12px; text-align: center; background: var(--bg-input);">
-                            <p style="font-size: 0.9rem; margin-bottom: 10px; color: var(--text-light);">Upload custom `.js` script files. Tools must define an `async function executeTool(args)` function.</p>
-                            <button class="settings-btn" onclick="document.getElementById('upload-tools-input').click()" style="margin: 0 auto; display: block; width: auto;">📂 Upload .js files</button>
+                            <p style="font-size: 0.9rem; margin-bottom: 10px; color: var(--text-light);">Define tools for your Aspect to run autonomously.</p>
+                            <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
+                                <button class="settings-btn" onclick="openSystemToolsModal()">➕ Add System Tool</button>
+                                <button class="settings-btn" onclick="openToolEditor()">✏️ New Tool</button>
+                                <button class="settings-btn" onclick="document.getElementById('upload-tools-input').click()">📂 Upload .js</button>
+                            </div>
                             <input type="file" id="upload-tools-input" accept=".js" multiple class="hidden" onchange="uploadTools(event)">
-                            <div class="file-list" id="tools-list" style="margin-top: 10px; font-weight: bold; color: var(--accent-primary);">No tools uploaded</div>
+                            <div class="file-list" id="tools-list" style="margin-top: 15px; text-align: left;">
+                                <span style="font-weight: bold; color: var(--accent-primary); display: block; text-align: center;">No tools added</span>
+                            </div>
                         </div>
                     </div>
                 </div>

@@ -25,14 +25,14 @@ import { state } from './state.js';
                 // Construct safe asynchronous wrapper using Web Worker to sandbox execution
                 const workerCode = `
                     self.onmessage = async function(e) {
-                        const { args } = e.data;
+                        const { args, state } = e.data;
                         try {
                             ${tool.code}
                             if (typeof executeTool === 'function') {
-                                const result = await executeTool(args);
-                                self.postMessage({ success: true, result });
+                                const result = await executeTool(args, state);
+                                self.postMessage({ success: true, result, state });
                             } else {
-                                self.postMessage({ success: false, error: "Function executeTool(args) is not defined in this script. Ensure you have 'function executeTool(args) { ... }' in your tool." });
+                                self.postMessage({ success: false, error: "Function executeTool(args, state) is not defined in this script. Ensure you have 'async function executeTool(args, state) { ... }' in your tool." });
                             }
                         } catch (err) {
                             self.postMessage({ success: false, error: err.message });
@@ -43,10 +43,18 @@ import { state } from './state.js';
                 const workerUrl = URL.createObjectURL(blob);
                 const worker = new Worker(workerUrl);
                 
+                // Initialize tool.state if it doesn't exist
+                if (!tool.state) tool.state = {};
+                
                 const result = await new Promise((resolve, reject) => {
                     worker.onmessage = (e) => {
-                        if (e.data.success) resolve(e.data.result);
-                        else reject(new Error(e.data.error));
+                        if (e.data.success) {
+                            tool.state = e.data.state; // Persist updated state
+                            markChangesUnsaved();
+                            resolve(e.data.result);
+                        } else {
+                            reject(new Error(e.data.error));
+                        }
                         worker.terminate();
                         URL.revokeObjectURL(workerUrl);
                     };
@@ -55,7 +63,7 @@ import { state } from './state.js';
                         worker.terminate();
                         URL.revokeObjectURL(workerUrl);
                     };
-                    worker.postMessage({ args: parsedArgs });
+                    worker.postMessage({ args: parsedArgs, state: tool.state });
                 });
                 return typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result);
             } catch (err) {

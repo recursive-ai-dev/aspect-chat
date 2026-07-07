@@ -50,9 +50,14 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
 
             const toolsFolder = zip.folder("Tools");
             if (aspect.tools) {
+                const toolsState = {};
                 aspect.tools.forEach(tool => {
                     toolsFolder.file(tool.name, tool.code);
+                    if (tool.state) toolsState[tool.name] = tool.state;
                 });
+                if (Object.keys(toolsState).length > 0) {
+                    toolsFolder.file("state.json", JSON.stringify(toolsState, null, 2));
+                }
             }
 
             // Save history in standard format
@@ -125,11 +130,26 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
                 const toolsFolder = zip.folder("Tools");
                 if (toolsFolder) {
                     const promises = [];
+                    let toolsState = {};
+                    
+                    if (toolsFolder.file("state.json")) {
+                        const stateJsonStr = await toolsFolder.file("state.json").async("string");
+                        try {
+                            toolsState = JSON.parse(stateJsonStr);
+                        } catch (e) {
+                            console.error("Failed to parse tool state.json");
+                        }
+                    }
+
                     Object.keys(toolsFolder.files).forEach(path => {
                         if (path.endsWith(".js") && !toolsFolder.files[path].dir) {
                             const p = toolsFolder.files[path].async("string").then(code => {
                                 const toolName = path.split('/').pop();
-                                tools.push({ name: toolName, code });
+                                tools.push({ 
+                                    name: toolName, 
+                                    code,
+                                    state: toolsState[toolName] || {}
+                                });
                             });
                             promises.push(p);
                         }

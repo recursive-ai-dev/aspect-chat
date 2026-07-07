@@ -23,6 +23,7 @@ import { selectPresetBackground } from './modules/ui.js';
 import { saveSettings } from './modules/settings.js';
 import { toggleToolsDropdown } from './modules/chat.js';
 import { onModelSelectDropdown } from './modules/settings.js';
+import { initToolEditor } from './modules/toolEditor.js';
 import { showChatView } from './modules/ui.js';
 import { processAIResponseAndTools } from './modules/tools.js';
 import { getGenericIcon } from './modules/aspects.js';
@@ -48,6 +49,7 @@ import { uploadBackground } from './modules/ui.js';
 import { getCurrentAspect } from './modules/aspects.js';
 import { editMessage, deleteMessage, regenerateMessage } from './modules/chat.js';
 import { abortAIRequest } from './modules/tools.js';
+import { openSystemToolsModal } from './modules/ui.js';
 
 window.getLakesideSageIcon = getLakesideSageIcon;
 window.loadDefaultAspects = loadDefaultAspects;
@@ -99,5 +101,9 @@ window.sendAIRequest = sendAIRequest;
 window.sendMessage = sendMessage;
 window.saveAspectToFile = saveAspectToFile;
 window.loadAspectFile = loadAspectFile;
+window.openSystemToolsModal = openSystemToolsModal;
 
-document.addEventListener('DOMContentLoaded', init);
+document.addEventListener('DOMContentLoaded', () => {
+    init();
+    initToolEditor();
+});
