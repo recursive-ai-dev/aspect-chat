@@ -210,6 +210,7 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
                 window.showToast(`Error loading .aspect file: ${err.message}`, "error");
             } finally {
                 event.target.value = '';
+            }
         }
 
         export async function exportAspectToWebpage() {

@@ -1,7 +1,8 @@
 import { basicSetup, EditorView } from "codemirror";
 import { javascript } from "@codemirror/lang-javascript";
-import { state, getCurrentAspect } from "./state.js";
-import { renderAspectEditor, markChangesUnsaved } from "./ui.js";
+import { state } from "./state.js";
+import { getCurrentAspect } from "./aspects.js";
+import { showEditorView, markChangesUnsaved } from "./ui.js";
 
 let editorView = null;
 let currentEditingToolIndex = -1;
@@ -94,5 +95,5 @@ export function saveToolCode() {
 
     markChangesUnsaved();
     closeToolEditor();
-    renderAspectEditor();
+    showEditorView();
 }

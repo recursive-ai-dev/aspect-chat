@@ -8,8 +8,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Balsamiq+Sans:wght@400;700&family=Patrick+Hand&display=swap" rel="stylesheet">
-  <script type="module" crossorigin src="/assets/index-CMnmD2k-.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-D-C96luB.css">
+  <script type="module" crossorigin src="./assets/index-CVHxhE2E.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-DROK-mEa.css">
 </head>
 <body>
 
@@ -68,7 +68,27 @@
                 <label>Model Name</label>
                 <input type="text" id="api-model-input" placeholder="gpt-4o">
                 <select id="api-model-select" class="hidden" onchange="onModelSelectDropdown()" style="padding: 10px; border: 3px solid var(--border-color); border-radius: 8px; font-family: 'Balsamiq Sans', cursive; font-size: 0.95rem; background: var(--bg-input);"></select>
+                <label>Max Context Messages</label>
+                <input type="number" id="api-max-context-input" placeholder="20" min="1" max="100">
                 <div id="model-fetch-status" style="font-size: 0.85rem; color: var(--text-light); margin-top: -8px;"></div>
+                <div style="margin-top: 15px; display: flex; align-items: center; justify-content: space-between;">
+                    <label style="margin: 0;">Enable Dark Mode</label>
+                    <label class="switch" style="position: relative; display: inline-block; width: 50px; height: 28px;">
+                        <input type="checkbox" id="dark-mode-toggle" style="opacity: 0; width: 0; height: 0;">
+                        <span style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--border-color); transition: .4s; border-radius: 34px;"></span>
+                        <span id="dark-mode-slider" style="position: absolute; content: ''; height: 20px; width: 20px; left: 4px; bottom: 4px; background-color: white; transition: .4s; border-radius: 50%;"></span>
+                    </label>
+                </div>
+                <script>
+                    document.getElementById('dark-mode-toggle').addEventListener('change', function() {
+                        const slider = document.getElementById('dark-mode-slider');
+                        if (this.checked) {
+                            slider.style.transform = 'translateX(22px)';
+                        } else {
+                            slider.style.transform = 'translateX(0)';
+                        }
+                    });
+                </script>
             </div>
             <div class="modal-nav-btns" style="margin-top: 25px;">
                 <button class="save-btn" onclick="saveSettings()">Save Configuration</button>
@@ -105,6 +125,32 @@
         </div>
     </div>
 
+    <!-- TOOL EDITOR MODAL -->
+    <div id="tool-editor-modal" class="hidden" style="position: fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); display:flex; justify-content:center; align-items:center; z-index: 60; backdrop-filter: blur(4px);">
+        <div class="modal-content" style="width: 90%; max-width: 800px; height: 80vh; display: flex; flex-direction: column; text-align: left; padding: 20px;">
+            <button class="close-modal-btn" onclick="closeToolEditor()">✕</button>
+            <h2 style="font-family: 'Patrick Hand', cursive; font-size: 2.2rem; margin-bottom: 10px; color: var(--accent-secondary-dark);">Edit Tool</h2>
+            <input type="text" id="tool-editor-name" placeholder="ToolName.js" style="margin-bottom: 15px; font-size: 1.1rem; padding: 8px; border-radius: 8px; border: 2px solid var(--border-color);">
+            <div id="codemirror-container" style="flex: 1; border: 3px solid var(--border-color); border-radius: 12px; overflow: hidden; background: #282c34;"></div>
+            <div class="modal-nav-btns" style="margin-top: 20px;">
+                <button class="settings-btn danger-btn" onclick="closeToolEditor()">Cancel</button>
+                <button class="save-btn" onclick="saveToolCode()">Save Tool</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SYSTEM TOOLS MODAL -->
+    <div id="system-tools-modal" class="hidden" style="position: fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); display:flex; justify-content:center; align-items:center; z-index: 60; backdrop-filter: blur(4px);">
+        <div class="modal-content" style="max-width: 500px; text-align: left; padding-top: 30px;">
+            <button class="close-modal-btn" onclick="document.getElementById('system-tools-modal').classList.add('hidden')">✕</button>
+            <h2 style="font-family: 'Patrick Hand', cursive; font-size: 2.2rem; text-align: center; color: var(--accent-secondary-dark);">System Tools</h2>
+            <p style="text-align: center; margin-bottom: 15px;">Add pre-built safe tools to your Aspect.</p>
+            <div id="system-tools-list" style="display: flex; flex-direction: column; gap: 10px;">
+                <!-- System tools injected here -->
+            </div>
+        </div>
+    </div>
+
     <!-- SIDEBAR -->
     <div id="sidebar">
         <h1 id="app-title">Aspect Studio</h1>
@@ -113,6 +159,7 @@
         <input type="file" id="upload-aspect-input" accept=".aspect" class="hidden" onchange="loadAspectFile(event)">
         
         <button id="sidebar-save-btn" class="settings-btn save-btn-sidebar" onclick="saveAspectToFile()">💾 Download .aspect</button>
+        <button id="sidebar-export-webpage-btn" class="settings-btn" onclick="exportAspectToWebpage()" style="margin-top: 5px;">🌐 Export Webpage</button>
         
         <div id="aspect-list">
             <!-- Aspects populated here -->
@@ -193,10 +240,16 @@
                     <div class="editor-field">
                         <label>Injectable JS Tools</label>
                         <div style="border: 2px dashed var(--border-color); padding: 15px; border-radius: 12px; text-align: center; background: var(--bg-input);">
-                            <p style="font-size: 0.9rem; margin-bottom: 10px; color: var(--text-light);">Upload custom `.js` script files. Tools must define an `async function executeTool(args)` function.</p>
-                            <button class="settings-btn" onclick="document.getElementById('upload-tools-input').click()" style="margin: 0 auto; display: block; width: auto;">📂 Upload .js files</button>
+                            <p style="font-size: 0.9rem; margin-bottom: 10px; color: var(--text-light);">Define tools for your Aspect to run autonomously.</p>
+                            <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
+                                <button class="settings-btn" onclick="openSystemToolsModal()">➕ Add System Tool</button>
+                                <button class="settings-btn" onclick="openToolEditor()">✏️ New Tool</button>
+                                <button class="settings-btn" onclick="document.getElementById('upload-tools-input').click()">📂 Upload .js</button>
+                            </div>
                             <input type="file" id="upload-tools-input" accept=".js" multiple class="hidden" onchange="uploadTools(event)">
-                            <div class="file-list" id="tools-list" style="margin-top: 10px; font-weight: bold; color: var(--accent-primary);">No tools uploaded</div>
+                            <div class="file-list" id="tools-list" style="margin-top: 15px; text-align: left;">
+                                <span style="font-weight: bold; color: var(--accent-primary); display: block; text-align: center;">No tools added</span>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -226,12 +279,16 @@
                         </div>
                     </div>
                     <textarea id="chat-input" placeholder="Type your message..." rows="1" onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); sendMessage();}"></textarea>
+                    <button id="stop-btn" class="hidden danger-btn" onclick="abortAIRequest()">Stop</button>
                     <button id="send-btn" onclick="sendMessage()">Send</button>
                 </div>
             </div>
         </div>
 
     </div>
+
+    <!-- TOAST NOTIFICATIONS -->
+    <div id="toast-container"></div>
 
 </body>
 </html>
