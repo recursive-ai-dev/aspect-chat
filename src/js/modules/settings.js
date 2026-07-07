@@ -10,6 +10,7 @@ import { state } from './state.js';
             state.settings.apiUrl = document.getElementById('api-url-input').value.trim();
             state.settings.apiKey = document.getElementById('api-key-input').value.trim();
             state.settings.model = document.getElementById('api-model-input').value.trim();
+            state.settings.maxContext = parseInt(document.getElementById('api-max-context-input').value) || 20;
             const providerSelect = document.getElementById('api-provider-select');
             if (providerSelect) {
                 state.settings.provider = providerSelect.value;
@@ -19,6 +20,7 @@ import { state } from './state.js';
             sessionStorage.setItem('apiKey', state.settings.apiKey);
             localStorage.removeItem('apiKey'); // Security cleanup
             localStorage.setItem('model', state.settings.model);
+            localStorage.setItem('maxContext', state.settings.maxContext);
             
             document.getElementById('settings-modal').classList.add('hidden');
         }

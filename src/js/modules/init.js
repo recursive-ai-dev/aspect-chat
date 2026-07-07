@@ -8,6 +8,7 @@ import { marked } from 'marked';
             document.getElementById('api-url-input').value = state.settings.apiUrl;
             document.getElementById('api-key-input').value = state.settings.apiKey;
             document.getElementById('api-model-input').value = state.settings.model;
+            document.getElementById('api-max-context-input').value = state.settings.maxContext;
             const providerSelect = document.getElementById('api-provider-select');
             if (providerSelect) {
                 providerSelect.value = state.settings.provider || 'custom';

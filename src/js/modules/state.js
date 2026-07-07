@@ -6,12 +6,14 @@
                 apiUrl: localStorage.getItem('apiUrl') || '',
                 apiKey: sessionStorage.getItem('apiKey') || '',
                 model: localStorage.getItem('model') || '',
-                provider: localStorage.getItem('provider') || 'custom'
+                provider: localStorage.getItem('provider') || 'custom',
+                maxContext: parseInt(localStorage.getItem('maxContext')) || 20
             },
             aspects: [],
             currentAspectId: null,
             hasUnsavedChanges: false,
-            consecutiveToolRuns: 0
+            consecutiveToolRuns: 0,
+            abortController: null
         };
 
         export function saveAspectsToLocalStorage() {

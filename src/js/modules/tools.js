@@ -1,4 +1,4 @@
-import { renderChatMessages } from './chat.js';
+import { renderChatMessages, createStreamingBubble, updateStreamingBubble } from './chat.js';
 import { getKnowledgeFilesText } from './db.js';
 import { init } from './init.js';
 import { markChangesUnsaved } from './ui.js';
@@ -135,14 +135,24 @@ import { state } from './state.js';
             await sendAIRequest(toolResultsText);
         }
 
+        export function abortAIRequest() {
+            if (state.abortController) {
+                state.abortController.abort();
+            }
+        }
+
         export async function sendAIRequest(extraContext) {
             const aspect = getCurrentAspect();
             if (!aspect) return;
 
             document.getElementById('send-btn').disabled = true;
+            document.getElementById('send-btn').classList.add('hidden');
+            document.getElementById('stop-btn').classList.remove('hidden');
             document.getElementById('chat-input').disabled = true;
 
             const writingId = addSystemLog(`*${aspect.name} is reflecting...*`);
+            
+            state.abortController = new AbortController();
 
             try {
                 if (!state.settings.apiUrl || !state.settings.apiKey) {
@@ -156,10 +166,11 @@ import { state } from './state.js';
                     { role: 'system', content: systemPrompt }
                 ];
 
-                aspect.chatHistory.forEach(msg => {
-                    if (msg.role === 'user' || msg.role === 'assistant') {
-                        apiMessages.push({ role: msg.role === 'user' ? 'user' : 'assistant', content: msg.content });
-                    }
+                const contextMessages = aspect.chatHistory.filter(msg => msg.role === 'user' || msg.role === 'assistant');
+                const slicedMessages = contextMessages.slice(-state.settings.maxContext);
+                
+                slicedMessages.forEach(msg => {
+                    apiMessages.push({ role: msg.role === 'user' ? 'user' : 'assistant', content: msg.content });
                 });
 
                 if (extraContext) {
@@ -179,8 +190,10 @@ import { state } from './state.js';
                     body: JSON.stringify({
                         model: state.settings.model,
                         messages: apiMessages,
-                        temperature: 0.7
-                    })
+                        temperature: 0.7,
+                        stream: true
+                    }),
+                    signal: state.abortController.signal
                 });
 
                 if (!response.ok) {
@@ -189,12 +202,60 @@ import { state } from './state.js';
                     throw new Error(`API error ${response.status}: ${errMsg}`);
                 }
                 
-                const data = await response.json();
-                const aiMessage = data.choices?.[0]?.message?.content ?? "";
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let aiMessage = "";
+                let isFirstChunk = true;
+                let bubbleElement = null;
 
                 const idx = aspect.chatHistory.findIndex(m => m.id === writingId);
                 if (idx !== -1) {
                     aspect.chatHistory.splice(idx, 1);
+                }
+                renderChatMessages();
+
+                let pendingData = "";
+                try {
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) {
+                            if (bubbleElement) updateStreamingBubble(bubbleElement, aiMessage); // final render
+                            break;
+                        }
+
+                        const chunk = decoder.decode(value, { stream: true });
+                        pendingData += chunk;
+                        const lines = pendingData.split('\n');
+                        pendingData = lines.pop(); // keep the last incomplete line
+                        
+                        for (let line of lines) {
+                            if (line.trim() === '') continue;
+                            if (line.startsWith('data: ')) {
+                                const dataStr = line.slice(6);
+                                if (dataStr === '[DONE]') continue;
+                                try {
+                                    const data = JSON.parse(dataStr);
+                                    if (data.choices && data.choices[0].delta && data.choices[0].delta.content) {
+                                        aiMessage += data.choices[0].delta.content;
+                                        
+                                        if (isFirstChunk) {
+                                            bubbleElement = createStreamingBubble();
+                                            isFirstChunk = false;
+                                        }
+                                        updateStreamingBubble(bubbleElement, aiMessage);
+                                    }
+                                } catch (e) {
+                                    // Could be partial JSON if SSE chunking is weird
+                                }
+                            }
+                        }
+                    }
+                } catch (e) {
+                    if (e.name === 'AbortError') {
+                        addSystemLog(`⚠️ **Generation stopped by user.**`);
+                    } else {
+                        throw e;
+                    }
                 }
 
                 await processAIResponseAndTools(aiMessage, aspect);
@@ -207,9 +268,12 @@ import { state } from './state.js';
                 addSystemLog(`❌ **Error:** ${error.message}`);
             } finally {
                 document.getElementById('send-btn').disabled = false;
+                document.getElementById('send-btn').classList.remove('hidden');
+                document.getElementById('stop-btn').classList.add('hidden');
                 document.getElementById('chat-input').disabled = false;
                 document.getElementById('chat-input').focus();
                 renderChatMessages();
+                state.abortController = null;
             }
         }
 
