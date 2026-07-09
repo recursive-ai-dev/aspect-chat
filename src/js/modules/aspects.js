@@ -82,6 +82,7 @@ import { state } from './state.js';
                         code: `// Time tool returning the local date and time\n// Usage: executeTool({})\nfunction executeTool(args) {\n    const now = new Date();\n    return {\n        time: now.toLocaleTimeString(),\n        date: now.toLocaleDateString(),\n        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone\n    };\n}`
                     }
                 ],
+                memory: {},
                 chatHistory: [
                     { role: 'assistant', content: 'Greetings, traveler. I am Lakeside Sage. Sit with me by the water. What is on your mind today?' }
                 ]
@@ -139,6 +140,7 @@ import { state } from './state.js';
                 icon: icon,
                 background: 'alone_image_pack/lake_sunset_002.jpeg',
                 tools: [],
+                memory: {},
                 chatHistory: []
             };
             state.aspects.push(newAspect);

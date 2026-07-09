@@ -7,16 +7,42 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mj
 
 
         let dbPromise = new Promise((resolve, reject) => {
-            const request = indexedDB.open('AspectKnowledgeDB', 1);
+            const request = indexedDB.open('AspectKnowledgeDB', 2);
             request.onupgradeneeded = (e) => {
                 const db = e.target.result;
                 if (!db.objectStoreNames.contains('files')) {
                     db.createObjectStore('files', { keyPath: ['aspectId', 'name'] });
                 }
+                if (!db.objectStoreNames.contains('memory')) {
+                    db.createObjectStore('memory', { keyPath: 'aspectId' });
+                }
             };
             request.onsuccess = (e) => resolve(e.target.result);
             request.onerror = (e) => reject(e.target.error);
         });
+
+        export async function saveMemory(aspectId, memoryObj) {
+            const db = await dbPromise;
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction('memory', 'readwrite');
+                tx.objectStore('memory').put({ aspectId, memory: memoryObj });
+                tx.oncomplete = () => resolve();
+                tx.onerror = (e) => reject(e.target.error);
+            });
+        }
+
+        export async function getMemory(aspectId) {
+            const db = await dbPromise;
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction('memory', 'readonly');
+                const store = tx.objectStore('memory');
+                const request = store.get(aspectId);
+                request.onsuccess = () => {
+                    resolve(request.result ? request.result.memory : {});
+                };
+                request.onerror = (e) => reject(e.target.error);
+            });
+        }
 
         export async function saveKnowledgeFile(aspectId, name, text) {
             const db = await dbPromise;
