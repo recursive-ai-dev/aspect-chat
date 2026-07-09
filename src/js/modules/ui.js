@@ -34,9 +34,6 @@ import { state } from './state.js';
             document.querySelectorAll('.modal-page').forEach(p => p.classList.remove('active'));
             document.getElementById('page-' + page).classList.add('active');
         }
-        export function closeWelcomeModal() {
-            document.getElementById('welcome-modal').style.display = 'none';
-        }
 
         export function showEditorView() {
             const aspect = getCurrentAspect();
@@ -328,4 +325,36 @@ import { state } from './state.js';
                 }
             };
             reader.readAsDataURL(file);
+        }
+
+        export function toggleAdvancedMode() {
+            const toggle = document.getElementById('advanced-mode-toggle');
+            const slider = document.getElementById('advanced-mode-slider');
+            const basicArea = document.getElementById('basic-config-area');
+            const advancedArea = document.getElementById('advanced-config-area');
+
+            if (toggle.checked) {
+                slider.style.transform = 'translateX(22px)';
+                basicArea.classList.add('hidden');
+                advancedArea.classList.remove('hidden');
+            } else {
+                slider.style.transform = 'translateX(0)';
+                basicArea.classList.remove('hidden');
+                advancedArea.classList.add('hidden');
+            }
+        }
+
+        export function updateBasicInstructions() {
+            const basicDesc = document.getElementById('edit-basic-instructions').value;
+            const toneValue = document.getElementById('edit-basic-tone').value;
+            const toneLabels = ["Very Casual & Friendly", "Casual", "Balanced", "Professional", "Strictly Formal"];
+
+            document.getElementById('tone-label').innerText = toneLabels[toneValue - 1];
+
+            let toneInstruction = toneLabels[toneValue - 1];
+
+            const newInstructions = `You are a helpful AI assistant.\n\nCORE DIRECTIVE:\n${basicDesc}\n\nTONE:\nYour communication style should be ${toneInstruction}.`;
+
+            document.getElementById('edit-instructions').value = newInstructions;
+            updateAspectData('instructions', newInstructions);
         }
