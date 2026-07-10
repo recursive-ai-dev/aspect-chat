@@ -169,10 +169,15 @@ Keep your responses friendly, concise, and helpful.`,
             aspectTemplates.forEach(template => {
                 const card = document.createElement('div');
                 card.className = 'template-card';
-                card.innerHTML = `
-                    <h3>${template.name}</h3>
-                    <p>${template.desc}</p>
-                `;
+
+                const h3 = document.createElement('h3');
+                h3.textContent = template.name;
+                card.appendChild(h3);
+
+                const p = document.createElement('p');
+                p.textContent = template.desc;
+                card.appendChild(p);
+
                 card.onclick = () => acceptCreateAspectFromTemplate(template.id);
                 gallery.appendChild(card);
             });
@@ -300,10 +305,16 @@ Keep your responses friendly, concise, and helpful.`,
                 
                 const iconSrc = aspect.icon || getGenericIcon();
                 
-                item.innerHTML = `
-                    <img src="${iconSrc}" class="aspect-icon-preview">
-                    <span class="aspect-name">${aspect.name}</span>
-                `;
+                const img = document.createElement('img');
+                img.src = iconSrc;
+                img.className = 'aspect-icon-preview';
+                item.appendChild(img);
+
+                const span = document.createElement('span');
+                span.className = 'aspect-name';
+                span.textContent = aspect.name;
+                item.appendChild(span);
+
                 list.appendChild(item);
             });
 
