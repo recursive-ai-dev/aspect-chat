@@ -1,4 +1,5 @@
 import { toggleAdvancedMode, updateBasicInstructions } from './modules/ui.js';
+import './modules/workflowBuilder.js';
 import { state } from './modules/state.js';
 window.state = state;
 import { saveKnowledgeFile } from './modules/db.js';
@@ -101,8 +102,8 @@ window.exportAspectToWebpage = exportAspectToWebpage;
 window.loadAspectFile = loadAspectFile;
 window.openSystemToolsModal = openSystemToolsModal;
 
-document.addEventListener('DOMContentLoaded', () => {
-    init();
+document.addEventListener('DOMContentLoaded', async () => {
+    await init();
     initToolEditor();
 });
 window.toggleAdvancedMode = toggleAdvancedMode;

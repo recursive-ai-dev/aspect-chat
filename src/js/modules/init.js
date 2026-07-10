@@ -4,7 +4,7 @@ import { state } from './state.js';
 import { marked } from 'marked';
 
 
-        export function init() {
+        export async function init() {
             document.getElementById('api-url-input').value = state.settings.apiUrl;
             document.getElementById('api-key-input').value = state.settings.apiKey;
             document.getElementById('api-model-input').value = state.settings.model;
@@ -31,7 +31,7 @@ import { marked } from 'marked';
                 gfm: true
             });
 
-            loadDefaultAspects();
+            await loadDefaultAspects();
             
             // Auto-resize chat input
             const chatInput = document.getElementById('chat-input');

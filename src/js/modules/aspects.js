@@ -89,7 +89,21 @@ Keep your responses friendly, concise, and helpful.`,
 - Shareable .aspect files.`,
                 icon: getStudioGuideIcon(),
                 background: 'alone_image_pack/lake_sunset_001.jpeg',
-                tools: [],
+                tools: [
+                    {
+                        name: 'Calculate.js',
+                        code: `// Calculator tool for basic math\n// Usage: executeTool({ expression: "2 + 2" })\nfunction executeTool(args) {\n    const expr = args.expression || args;\n    if (!expr) return "No expression provided.";\n    try {\n        if (/^[0-9+\\-*/().\\s]+$/.test(expr)) {\n            const res = new Function("return " + expr)();\n            return { result: res };\n        }\n        return { error: "Invalid math expression characters." };\n    } catch (e) {\n        return { error: e.message };\n    }\n}`
+                    },
+                    {
+                        name: 'Weather.js',
+                        code: `// Weather tool that returns serene weather descriptions\n// Usage: executeTool({ location: "Redwoods" })\nfunction executeTool(args) {\n    const loc = args.location || "Redwoods";\n    const conditions = [\n        "A gentle mist rolls across the water, keeping the redwoods cool. 62°F.",\n        "Golden rays of sunshine break through the pine canopy. 74°F.",\n        "A soft, serene drizzle falls, creating concentric rings on the lake. 58°F.",\n        "Clear evening skies with a crisp breeze rustling the redwood needles. 50°F."\n    ];\n    const index = Math.abs(loc.length + new Date().getMinutes()) % conditions.length;\n    return {\n        location: loc,\n        condition: conditions[index],\n        serenityLevel: "Maximum"\n    };\n}`
+                    },
+                    {
+                        name: 'DateTime.js',
+                        code: `// Time tool returning the local date and time\n// Usage: executeTool({})\nfunction executeTool(args) {\n    const now = new Date();\n    return {\n        time: now.toLocaleTimeString(),\n        date: now.toLocaleDateString(),\n        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone\n    };\n}`
+                    }
+                ],
+                memory: {},
                 chatHistory: [
                     { role: 'assistant', content: 'Welcome to Aspect Studio! 🌸 I am the Studio Guide. I am here to help you get started. Do you want to learn how to set up your API key, or would you like to know how to create your first custom Aspect?' }
                 ]
@@ -212,6 +226,31 @@ Keep your responses friendly, concise, and helpful.`,
             reader.readAsDataURL(file);
         }
 
+        export function acceptCreateAspect() {
+            const name = document.getElementById('create-aspect-name-input').value.trim() || 'New Aspect';
+            const desc = document.getElementById('create-aspect-desc-input').value.trim() || 'A brand new persona.';
+            const icon = window.tempCreateIcon || getGenericIcon();
+
+            const newAspect = {
+                id: Date.now().toString(),
+                name: name,
+                description: desc,
+                instructions: 'You are a helpful assistant.',
+                knowledge: '',
+                icon: icon,
+                background: 'alone_image_pack/lake_sunset_002.jpeg',
+                tools: [],
+                memory: {},
+                chatHistory: []
+            };
+            state.aspects.push(newAspect);
+            state.currentAspectId = newAspect.id;
+            renderAspectList();
+            showEditorView();
+            markChangesUnsaved();
+            document.getElementById('create-aspect-modal').classList.add('hidden');
+        }
+        
         export function cancelCreateAspect() {
             document.getElementById('create-aspect-modal').classList.add('hidden');
         }
