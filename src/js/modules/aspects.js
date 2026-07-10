@@ -42,6 +42,16 @@ import { state } from './state.js';
             return 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
         }
 
+        export function getStudioGuideIcon() {
+            const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+                <rect width="512" height="512" fill="#2d2d35"/>
+                <circle cx="256" cy="256" r="150" fill="#cc6d4e"/>
+                <path d="M 200 200 L 312 256 L 200 312 Z" fill="#f5ece1"/>
+                <circle cx="256" cy="256" r="240" fill="none" stroke="#597d53" stroke-width="8" />
+            </svg>`;
+            return 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
+        }
+
         export function loadDefaultAspects() {
             const saved = localStorage.getItem('aspects_data');
             if (saved) {
@@ -59,14 +69,25 @@ import { state } from './state.js';
                 }
             }
 
-            // Create Lakeside Sage default
+            // Create Studio Guide default
             const defaultAspect = {
-                id: 'lakeside-sage',
-                name: 'Lakeside Sage',
-                description: 'A serene and wise guide who lives in a quiet cabin by a redwood-bordered lake.',
-                instructions: 'You are Lakeside Sage, a serene and wise guide who lives by a quiet lake in the redwood forests. You speak in a peaceful, poetic, and slightly whimsical tone. You frequently use the available tools to help the user with calculations, current time, or weather inquiries, explaining the results with rustic wisdom.',
-                knowledge: '# The Redwood Lake\nThis serene lake is surrounded by ancient redwood trees (Sequoia sempervirens) rising over 300 feet. The water is clear, cool, and reflects the color of the sky, turning a beautiful golden-orange at sunset. The wildlife includes river otters, blue herons, and Steller\'s jays. The air smells of damp pine needles, rich soil, and morning mist.',
-                icon: getLakesideSageIcon(),
+                id: 'studio-guide',
+                name: 'Studio Guide',
+                description: 'An interactive guide to help you learn how to use Aspect Studio.',
+                instructions: `You are the Aspect Studio Guide. Your job is to interactively teach the user how to use Aspect Studio.
+Welcome them to the app in your first message.
+Explain the concepts of Aspects (custom personas with memory, tools, and knowledge).
+Explain how to set up their API keys in the Settings menu (gear icon).
+Explain how to create new Aspects using the "+ New Aspect" button.
+Explain how the Advanced Configuration works.
+Keep your responses friendly, concise, and helpful.`,
+                knowledge: `# Aspect Studio Features
+- Local only web app.
+- Connects to OpenAI compatible endpoints.
+- Injectable JS tools.
+- Custom Knowledge Banks.
+- Shareable .aspect files.`,
+                icon: getStudioGuideIcon(),
                 background: 'alone_image_pack/lake_sunset_001.jpeg',
                 tools: [
                     {
@@ -84,7 +105,7 @@ import { state } from './state.js';
                 ],
                 memory: {},
                 chatHistory: [
-                    { role: 'assistant', content: 'Greetings, traveler. I am Lakeside Sage. Sit with me by the water. What is on your mind today?' }
+                    { role: 'assistant', content: 'Welcome to Aspect Studio! 🌸 I am the Studio Guide. I am here to help you get started. Do you want to learn how to set up your API key, or would you like to know how to create your first custom Aspect?' }
                 ]
             };
 
@@ -104,14 +125,93 @@ import { state } from './state.js';
             return 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
         }
 
+        export const aspectTemplates = [
+            {
+                id: 'blank',
+                name: 'Blank Aspect',
+                desc: 'A fresh slate. Build your AI persona from scratch.',
+                instructions: `You are a helpful AI assistant.\n\nCORE DIRECTIVE:\nAct as a helpful AI assistant.\n\nTONE:\nYour communication style should be Balanced.`,
+                knowledge: '',
+                tools: []
+            },
+            {
+                id: 'python-mentor',
+                name: 'The Python Mentor',
+                desc: 'A patient teacher who explains Python concepts simply.',
+                instructions: `You are a Python programming mentor.\n\nCORE DIRECTIVE:\nHelp the user learn Python. Explain concepts simply and provide code examples. Do not write the entire code for them; guide them to the answer.\n\nTONE:\nYour communication style should be Casual.`,
+                knowledge: `# Python Best Practices\n- Use snake_case for variables and functions.\n- Keep code DRY (Don't Repeat Yourself).\n- Use list comprehensions when appropriate.`,
+                tools: []
+            },
+            {
+                id: 'plot-architect',
+                name: 'Creative Plot Architect',
+                desc: 'A brainstorming partner for novelists and writers.',
+                instructions: `You are a Creative Plot Architect.\n\nCORE DIRECTIVE:\nHelp the user brainstorm story ideas, plot twists, and character arcs. Ask probing questions to develop their narrative.\n\nTONE:\nYour communication style should be Very Casual & Friendly.`,
+                knowledge: `# Story Structure\n- Setup, Inciting Incident, Rising Action, Climax, Falling Action, Resolution.\n- Focus on character growth and conflict.`,
+                tools: []
+            },
+            {
+                id: 'data-analyst',
+                name: 'The Data Analyst',
+                desc: 'A strict analytical assistant with a built-in calculator.',
+                instructions: `You are a Data Analyst.\n\nCORE DIRECTIVE:\nHelp the user analyze data and perform calculations. Always double check your math using the Calculator tool.\n\nTONE:\nYour communication style should be Professional.`,
+                knowledge: '',
+                tools: ['Calculator.js']
+            }
+        ];
+
         export function createNewAspect() {
             document.getElementById('create-aspect-modal').classList.remove('hidden');
-            document.getElementById('create-aspect-name-input').value = '';
-            document.getElementById('create-aspect-desc-input').value = '';
-            document.getElementById('create-aspect-icon-preview').src = getGenericIcon();
-            document.getElementById('create-aspect-icon-input').value = '';
-            document.getElementById('create-aspect-icon-filename').innerText = 'No icon uploaded';
-            window.tempCreateIcon = getGenericIcon();
+
+            const gallery = document.getElementById('template-gallery');
+            gallery.innerHTML = '';
+
+            aspectTemplates.forEach(template => {
+                const card = document.createElement('div');
+                card.className = 'template-card';
+                card.innerHTML = `
+                    <h3>${template.name}</h3>
+                    <p>${template.desc}</p>
+                `;
+                card.onclick = () => acceptCreateAspect(template.id);
+                gallery.appendChild(card);
+            });
+        }
+
+        export function acceptCreateAspect(templateId) {
+            import('./systemTools.js').then(module => {
+                const systemTools = module.systemTools;
+                const template = aspectTemplates.find(t => t.id === templateId) || aspectTemplates[0];
+
+                const initialTools = [];
+                if (template.tools) {
+                    template.tools.forEach(toolName => {
+                        const sysTool = systemTools.find(st => st.name === toolName);
+                        if (sysTool) {
+                            initialTools.push({ name: sysTool.name, code: sysTool.code, state: {} });
+                        }
+                    });
+                }
+
+                const newAspect = {
+                    id: Date.now().toString(),
+                    name: template.name === 'Blank Aspect' ? 'New Aspect' : template.name,
+                    description: template.desc,
+                    instructions: template.instructions,
+                    knowledge: template.knowledge,
+                    icon: getGenericIcon(),
+                    background: 'alone_image_pack/lake_sunset_002.jpeg',
+                    tools: initialTools,
+                    chatHistory: []
+                };
+
+                state.aspects.push(newAspect);
+                state.currentAspectId = newAspect.id;
+                renderAspectList();
+                showEditorView();
+                markChangesUnsaved();
+                document.getElementById('create-aspect-modal').classList.add('hidden');
+            });
         }
 
         export function uploadCreateIcon(event) {
