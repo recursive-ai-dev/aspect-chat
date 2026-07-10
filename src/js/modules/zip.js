@@ -203,15 +203,19 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
                 // Import raw knowledge files to IndexedDB
                 const knowledgeFilesFolder = zip.folder("Knowledge/Files");
                 if (knowledgeFilesFolder) {
+                    const savePromises = [];
                     for (let relativePath in knowledgeFilesFolder.files) {
                         const zipEntry = knowledgeFilesFolder.files[relativePath];
                         if (!zipEntry.dir) {
-                            const fileText = await zipEntry.async('string');
-                            // Extract just the filename from relative path (if nested, we flatten for IndexedDB)
-                            const fileName = relativePath.split('/').pop() || relativePath;
-                            await saveKnowledgeFile(newAspect.id, fileName, fileText);
+                            const p = zipEntry.async('string').then(fileText => {
+                                // Extract just the filename from relative path (if nested, we flatten for IndexedDB)
+                                const fileName = relativePath.split('/').pop() || relativePath;
+                                return saveKnowledgeFile(newAspect.id, fileName, fileText);
+                            });
+                            savePromises.push(p);
                         }
                     }
+                    await Promise.all(savePromises);
                 }
 
                 renderAspectList();
