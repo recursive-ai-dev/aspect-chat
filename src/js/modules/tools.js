@@ -1,6 +1,5 @@
 import { renderChatMessages, createStreamingBubble, updateStreamingBubble } from './chat.js';
 import { getKnowledgeFilesText } from './db.js';
-import { init } from './init.js';
 import { markChangesUnsaved } from './ui.js';
 import { initWebLLMEngine } from './webllm.js';
 import { getCurrentAspect } from './aspects.js';
