@@ -174,11 +174,21 @@ Keep your responses friendly, concise, and helpful.`,
                     <p>${template.desc}</p>
                 `;
                 card.onclick = () => acceptCreateAspectTemplate(template.id);
+
+                const h3 = document.createElement('h3');
+                h3.textContent = template.name;
+                card.appendChild(h3);
+
+                const p = document.createElement('p');
+                p.textContent = template.desc;
+                card.appendChild(p);
+
+                card.onclick = () => acceptCreateAspectFromTemplate(template.id);
                 gallery.appendChild(card);
             });
         }
 
-        export function acceptCreateAspectTemplate(templateId) {
+        export function acceptCreateAspectFromTemplate(templateId) {
             import('./systemTools.js').then(module => {
                 const systemTools = module.systemTools;
                 const template = aspectTemplates.find(t => t.id === templateId) || aspectTemplates[0];
@@ -300,10 +310,16 @@ Keep your responses friendly, concise, and helpful.`,
                 
                 const iconSrc = aspect.icon || getGenericIcon();
                 
-                item.innerHTML = `
-                    <img src="${iconSrc}" class="aspect-icon-preview">
-                    <span class="aspect-name">${aspect.name}</span>
-                `;
+                const img = document.createElement('img');
+                img.src = iconSrc;
+                img.className = 'aspect-icon-preview';
+                item.appendChild(img);
+
+                const span = document.createElement('span');
+                span.className = 'aspect-name';
+                span.textContent = aspect.name;
+                item.appendChild(span);
+
                 list.appendChild(item);
             });
 

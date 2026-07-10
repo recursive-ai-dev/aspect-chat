@@ -17,7 +17,7 @@ import { state } from './state.js';
                 localStorage.setItem('provider', state.settings.provider);
             }
             localStorage.setItem('apiUrl', state.settings.apiUrl);
-            sessionStorage.setItem('apiKey', state.settings.apiKey);
+            sessionStorage.removeItem('apiKey');
             localStorage.removeItem('apiKey'); // Security cleanup
             localStorage.setItem('model', state.settings.model);
             localStorage.setItem('maxContext', state.settings.maxContext);
@@ -41,6 +41,64 @@ import { state } from './state.js';
                 urlInput.value = providerSelect.value;
             }
             fetchModelsIfPossible();
+        }
+
+        export async function fetchProviderModels(url, key) {
+            let fetchUrl = url;
+            if (!fetchUrl.endsWith('/models') && !fetchUrl.endsWith('/models/')) {
+                fetchUrl = fetchUrl.replace(/\/+$/, '') + '/models';
+            }
+
+            const headers = {};
+            if (key) {
+                headers['Authorization'] = `Bearer ${key}`;
+            }
+
+            const response = await fetch(fetchUrl, { headers });
+
+            if (!response.ok) {
+                let errMsg = response.statusText;
+                try {
+                    const errData = await response.json();
+                    errMsg = errData.error?.message || errData.message || errMsg;
+                } catch(e){}
+                if (response.status === 401 || response.status === 403) {
+                    throw new Error(`Unauthorized or invalid API key (${response.status}).`);
+                } else if (response.status === 429) {
+                    throw new Error(`Rate limit exceeded (${response.status}).`);
+                } else {
+                    throw new Error(`Error ${response.status}: ${errMsg}`);
+                }
+            }
+
+            const data = await response.json();
+            const models = data.data || data.models || [];
+
+            if (!Array.isArray(models) || models.length === 0) {
+                throw new Error("No models found.");
+            }
+            return models;
+        }
+
+        export function updateModelSelectUI(models, modelSelect, modelInput, statusDiv) {
+            modelSelect.innerHTML = '';
+            models.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.id;
+                opt.innerText = m.id;
+                modelSelect.appendChild(opt);
+            });
+
+            if (Array.from(modelSelect.options).some(o => o.value === modelInput.value)) {
+                modelSelect.value = modelInput.value;
+            } else {
+                modelInput.value = modelSelect.value;
+            }
+
+            modelInput.classList.add('hidden');
+            modelSelect.classList.remove('hidden');
+            statusDiv.innerText = 'Models fetched successfully.';
+            statusDiv.style.color = 'var(--accent-primary)';
         }
 
         export async function fetchModelsIfPossible() {
@@ -70,58 +128,8 @@ import { state } from './state.js';
             statusDiv.innerText = 'Fetching models...';
             
             try {
-                let fetchUrl = url;
-                if (!fetchUrl.endsWith('/models') && !fetchUrl.endsWith('/models/')) {
-                    fetchUrl = fetchUrl.replace(/\/+$/, '') + '/models';
-                }
-                
-                const headers = {};
-                if (key) {
-                    headers['Authorization'] = `Bearer ${key}`;
-                }
-
-                const response = await fetch(fetchUrl, { headers });
-                
-                if (!response.ok) {
-                    let errMsg = response.statusText;
-                    try {
-                        const errData = await response.json();
-                        errMsg = errData.error?.message || errData.message || errMsg;
-                    } catch(e){}
-                    if (response.status === 401 || response.status === 403) {
-                        throw new Error(`Unauthorized or invalid API key (${response.status}).`);
-                    } else if (response.status === 429) {
-                        throw new Error(`Rate limit exceeded (${response.status}).`);
-                    } else {
-                        throw new Error(`Error ${response.status}: ${errMsg}`);
-                    }
-                }
-
-                const data = await response.json();
-                const models = data.data || data.models || [];
-                
-                if (!Array.isArray(models) || models.length === 0) {
-                    throw new Error("No models found.");
-                }
-
-                modelSelect.innerHTML = '';
-                models.forEach(m => {
-                    const opt = document.createElement('option');
-                    opt.value = m.id;
-                    opt.innerText = m.id;
-                    modelSelect.appendChild(opt);
-                });
-
-                if (Array.from(modelSelect.options).some(o => o.value === modelInput.value)) {
-                    modelSelect.value = modelInput.value;
-                } else {
-                    modelInput.value = modelSelect.value;
-                }
-
-                modelInput.classList.add('hidden');
-                modelSelect.classList.remove('hidden');
-                statusDiv.innerText = 'Models fetched successfully.';
-                statusDiv.style.color = 'var(--accent-primary)';
+                const models = await fetchProviderModels(url, key);
+                updateModelSelectUI(models, modelSelect, modelInput, statusDiv);
             } catch (err) {
                 statusDiv.innerText = err.message;
                 statusDiv.style.color = '#cc5a5a';
