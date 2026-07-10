@@ -44,15 +44,6 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mj
             });
         }
 
-        export async function saveKnowledgeFile(aspectId, name, text) {
-            const db = await dbPromise;
-            return new Promise((resolve, reject) => {
-                const tx = db.transaction('files', 'readwrite');
-                tx.objectStore('files').put({ aspectId, name, text });
-                tx.oncomplete = () => resolve();
-                tx.onerror = (e) => reject(e.target.error);
-            });
-        }
 
         // In-memory cache for performance
         let knowledgeCache = {}; // aspectId -> Array of file objects
@@ -123,6 +114,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mj
 
             let appendedText = "";
             let processedCount = 0;
+            let uploadPromises = [];
 
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
@@ -150,15 +142,23 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mj
                     }
                     
                     if (text) {
-                        await saveKnowledgeFile(aspect.id, file.name, text);
-                        appendedText += `\nUploaded ${file.name} to internal storage.\n`;
-                        processedCount++;
+                        uploadPromises.push(
+                            saveKnowledgeFile(aspect.id, file.name, text).then(() => {
+                                appendedText += `\nUploaded ${file.name} to internal storage.\n`;
+                                processedCount++;
+                            }).catch((e) => {
+                                console.error("Error saving file", file.name, e);
+                                window.showToast(`Failed to save ${file.name}: ${e.message}`, "error");
+                            })
+                        );
                     }
                 } catch (e) {
                     console.error("Error processing file", file.name, e);
                     window.showToast(`Failed to process ${file.name}: ${e.message}`, "error");
                 }
             }
+
+            await Promise.all(uploadPromises);
 
             if (processedCount > 0) {
                 const knInput = document.getElementById('edit-knowledge');
