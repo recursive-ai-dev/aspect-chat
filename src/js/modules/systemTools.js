@@ -7,10 +7,65 @@ export const systemTools = [
 async function executeTool(args, state) {
     const expr = args.expression || args;
     if (!expr) return "No expression provided.";
+
+    // Safe mathematical expression evaluator
+    const evaluate = (expression) => {
+        // Remove spaces for easier tokenization, though the regex mostly handles it
+        // We'll tokenize keeping numbers and operators
+        const tokens = expression.match(/\\d+\\.\\d+|\\d+|[-+*/()]/g) || [];
+        if (tokens.length === 0) throw new Error("No valid tokens found");
+        let pos = 0;
+
+        const parseFactor = () => {
+            if (pos >= tokens.length) throw new Error("Unexpected end of expression");
+            let sign = 1;
+            while (tokens[pos] === '+' || tokens[pos] === '-') {
+                if (tokens[pos++] === '-') sign = -sign;
+            }
+            if (pos >= tokens.length) throw new Error("Unexpected end of expression");
+
+            if (tokens[pos] === '(') {
+                pos++;
+                const val = parseExpression();
+                if (pos >= tokens.length || tokens[pos] !== ')') throw new Error("Missing closing parenthesis");
+                pos++;
+                return sign * val;
+            }
+            const val = parseFloat(tokens[pos++]);
+            if (isNaN(val)) throw new Error("Invalid number");
+            return sign * val;
+        };
+
+        const parseTerm = () => {
+            let val = parseFactor();
+            while (pos < tokens.length && (tokens[pos] === '*' || tokens[pos] === '/')) {
+                const op = tokens[pos++];
+                const nextVal = parseFactor();
+                if (op === '*') val *= nextVal;
+                else val /= nextVal;
+            }
+            return val;
+        };
+
+        const parseExpression = () => {
+            let val = parseTerm();
+            while (pos < tokens.length && (tokens[pos] === '+' || tokens[pos] === '-')) {
+                const op = tokens[pos++];
+                const nextVal = parseTerm();
+                if (op === '+') val += nextVal;
+                else val -= nextVal;
+            }
+            return val;
+        };
+
+        const result = parseExpression();
+        if (pos < tokens.length) throw new Error("Unexpected tokens at end of expression");
+        return result;
+    };
+
     try {
-        // Safe evaluation of basic math
-        if (/^[0-9+\\-*/().\\s]+$/.test(expr)) {
-            const res = new Function("return " + expr)();
+        if (/^[0-9+\\\-/*().\\s]+$/.test(expr)) {
+            const res = evaluate(expr);
             return { result: res };
         }
         return { error: "Invalid math expression characters." };
