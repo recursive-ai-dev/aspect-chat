@@ -160,9 +160,9 @@ export function escapeHtml(str) {
         }
 
         let lastStreamUpdate = 0;
-        export function updateStreamingBubble(bubble, content) {
+        export function updateStreamingBubble(bubble, content, force = false) {
             const now = Date.now();
-            if (now - lastStreamUpdate > 50) { // throttle parsing to every 50ms
+            if (force || now - lastStreamUpdate > 50) { // throttle parsing to every 50ms
                 bubble.innerHTML = DOMPurify.sanitize(marked.parse(content));
                 const container = document.getElementById('chat-messages');
                 container.scrollTop = container.scrollHeight;

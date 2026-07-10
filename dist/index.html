@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Balsamiq+Sans:wght@400;700&family=Patrick+Hand&display=swap" rel="stylesheet">
-  <script type="module" crossorigin src="./assets/index-B8e07Ybh.js"></script>
+  <script type="module" crossorigin src="./assets/index-COhB97Xb.js"></script>
   <link rel="stylesheet" crossorigin href="./assets/index-DROK-mEa.css">
 </head>
 <body>
@@ -53,7 +53,7 @@
             <div class="settings-form">
                 <label>Service Provider Template</label>
                 <select id="api-provider-select" onchange="onProviderSelect()" style="padding: 10px; border: 3px solid var(--border-color); border-radius: 8px; font-family: 'Balsamiq Sans', cursive; font-size: 0.95rem; background: var(--bg-input);">
-                    <option value="custom">Custom</option>
+                    <option value="custom">Custom</option>\n                    <option value="webllm">WebLLM (In-Browser Offline)</option>
                     <option value="https://api.cohere.ai/v1">Cohere</option>
                     <option value="https://api.groq.com/openai/v1">Groq</option>
                     <option value="https://api.cerebras.ai/v1">Cerebras</option>
@@ -68,7 +68,26 @@
                 <label>Model Name</label>
                 <input type="text" id="api-model-input" placeholder="gpt-4o">
                 <select id="api-model-select" class="hidden" onchange="onModelSelectDropdown()" style="padding: 10px; border: 3px solid var(--border-color); border-radius: 8px; font-family: 'Balsamiq Sans', cursive; font-size: 0.95rem; background: var(--bg-input);"></select>
-                <label>Max Context Messages</label>
+
+                <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 15px 0;">
+                <h3 style="font-family: 'Patrick Hand', cursive; font-size: 1.5rem; color: var(--text-light); margin-top: 0;">Fallback Provider (Optional)</h3>
+                <p style="font-size: 0.8rem; color: var(--text-light); margin-top: -10px; margin-bottom: 10px;">Used if the primary provider fails (e.g. offline fallback to WebLLM).</p>
+                <label>Fallback Provider</label>
+                <select id="fallback-provider-select" onchange="onFallbackProviderSelect()" style="padding: 10px; border: 3px solid var(--border-color); border-radius: 8px; font-family: 'Balsamiq Sans', cursive; font-size: 0.95rem; background: var(--bg-input);">
+                    <option value="">None</option>
+                    <option value="webllm">WebLLM (In-Browser Offline)</option>
+                    <option value="custom">Custom URL</option>
+                </select>
+                <label class="fallback-field hidden">Fallback API URL</label>
+                <input type="text" id="fallback-url-input" class="fallback-field hidden" placeholder="https://api.openai.com/v1">
+                <label class="fallback-field hidden">Fallback API Key</label>
+                <input type="password" id="fallback-key-input" class="fallback-field hidden" placeholder="sk-...">
+                <label class="fallback-field hidden">Fallback Model Name</label>
+                <input type="text" id="fallback-model-input" class="fallback-field hidden" placeholder="gpt-4o">
+                <select id="fallback-model-select" class="hidden" onchange="onFallbackModelSelectDropdown()" style="padding: 10px; border: 3px solid var(--border-color); border-radius: 8px; font-family: 'Balsamiq Sans', cursive; font-size: 0.95rem; background: var(--bg-input);"></select>
+                <div id="fallback-model-fetch-status" style="font-size: 0.85rem; color: var(--text-light); margin-top: -8px;"></div>
+                <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 15px 0;">
+<label>Max Context Messages</label>
                 <input type="number" id="api-max-context-input" placeholder="20" min="1" max="100">
                 <div id="model-fetch-status" style="font-size: 0.85rem; color: var(--text-light); margin-top: -8px;"></div>
                 <div style="margin-top: 15px; display: flex; align-items: center; justify-content: space-between;">

@@ -2,6 +2,7 @@ import { renderChatMessages, createStreamingBubble, updateStreamingBubble } from
 import { getKnowledgeFilesText } from './db.js';
 import { init } from './init.js';
 import { markChangesUnsaved } from './ui.js';
+import { initWebLLMEngine } from './webllm.js';
 import { getCurrentAspect } from './aspects.js';
 import { state } from './state.js';
 
@@ -203,7 +204,7 @@ import { state } from './state.js';
 
             for (let tc of toolCalls) {
                 const logId = addSystemLog(`Executing tool \`${tc.name}\`...`);
-                let result = await executeJavaScriptTool(tc.name, tc.args);
+                const result = await getCachedOrExecuteTool(tc.name, tc.args);
                 updateSystemLog(logId, `🛠️ **Tool Executed:** \`${tc.name}\`\n\n**Result:**\n\`\`\`json\n${result}\n\`\`\``);
                 toolResultsText += `Tool ${tc.name} returned:\n${result}\n\n`;
 
@@ -237,6 +238,20 @@ import { state } from './state.js';
             }
 
             await sendAIRequest(toolResultsText);
+        }
+
+
+        const toolCache = new Map();
+
+        async function getCachedOrExecuteTool(toolName, toolArgs) {
+            const cacheKey = `${toolName}_${toolArgs}`;
+            if (toolCache.has(cacheKey)) {
+                addSystemLog(`⚡ **Cache Hit:** \`${toolName}\``);
+                return toolCache.get(cacheKey);
+            }
+            const result = await executeJavaScriptTool(toolName, toolArgs);
+            toolCache.set(cacheKey, result);
+            return result;
         }
 
         export function abortAIRequest() {
@@ -453,7 +468,7 @@ ${response}`);
             if (userToolCalls.length > 0) {
                 for (let tc of userToolCalls) {
                     const logId = addSystemLog(`Executing user-triggered tool \`${tc.name}\`...`);
-                    const result = await executeJavaScriptTool(tc.name, tc.args);
+                    const result = await getCachedOrExecuteTool(tc.name, tc.args);
                     updateSystemLog(logId, `🛠️ **User-Triggered Tool:** \`${tc.name}\`\n\n**Result:**\n\`\`\`json\n${result}\n\`\`\``);
                     userToolResults += `User executed tool ${tc.name} which returned:\n${result}\n\n`;
                 }

@@ -54,37 +54,66 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mj
             });
         }
 
-        export async function getKnowledgeFilesRaw(aspectId) {
+        // In-memory cache for performance
+        let knowledgeCache = {}; // aspectId -> Array of file objects
+        let isCacheInitialized = false;
+
+        async function initCache() {
+            if (isCacheInitialized) return;
             const db = await dbPromise;
             return new Promise((resolve, reject) => {
                 const tx = db.transaction('files', 'readonly');
                 const store = tx.objectStore('files');
                 const request = store.getAll();
                 request.onsuccess = () => {
-                    resolve(request.result.filter(f => f.aspectId === aspectId));
+                    knowledgeCache = {};
+                    request.result.forEach(f => {
+                        if (!knowledgeCache[f.aspectId]) knowledgeCache[f.aspectId] = [];
+                        knowledgeCache[f.aspectId].push(f);
+                    });
+                    isCacheInitialized = true;
+                    resolve();
                 };
                 request.onerror = (e) => reject(e.target.error);
             });
         }
 
-        export async function getKnowledgeFilesText(aspectId) {
+        export async function saveKnowledgeFile(aspectId, name, text) {
+            await initCache();
             const db = await dbPromise;
+
+            // Update cache immediately
+            if (!knowledgeCache[aspectId]) knowledgeCache[aspectId] = [];
+            const existingIdx = knowledgeCache[aspectId].findIndex(f => f.name === name);
+            if (existingIdx !== -1) {
+                knowledgeCache[aspectId][existingIdx].text = text;
+            } else {
+                knowledgeCache[aspectId].push({ aspectId, name, text });
+            }
+
+            // Sync with DB
             return new Promise((resolve, reject) => {
-                const tx = db.transaction('files', 'readonly');
-                const store = tx.objectStore('files');
-                const request = store.getAll();
-                request.onsuccess = () => {
-                    const files = request.result.filter(f => f.aspectId === aspectId);
-                    if (files.length === 0) {
-                        resolve("");
-                        return;
-                    }
-                    const combinedText = files.map(f => `\n\n--- Start of File: ${f.name} ---\n${f.text}\n--- End of File: ${f.name} ---`).join('\n');
-                    resolve(combinedText);
-                };
-                request.onerror = (e) => reject(e.target.error);
+                const tx = db.transaction('files', 'readwrite');
+                tx.objectStore('files').put({ aspectId, name, text });
+                tx.oncomplete = () => resolve();
+                tx.onerror = (e) => reject(e.target.error);
             });
         }
+
+        export async function getKnowledgeFilesRaw(aspectId) {
+            await initCache();
+            return knowledgeCache[aspectId] || [];
+        }
+
+        export async function getKnowledgeFilesText(aspectId) {
+            await initCache();
+            const files = knowledgeCache[aspectId] || [];
+            if (files.length === 0) {
+                return "";
+            }
+            return files.map(f => `\n\n--- Start of File: ${f.name} ---\n${f.text}\n--- End of File: ${f.name} ---`).join('\n');
+        }
+
 
         export async function uploadKnowledgeFiles(event) {
             const files = event.target.files;

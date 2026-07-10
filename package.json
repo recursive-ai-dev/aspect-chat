@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "@codemirror/lang-javascript": "^6.2.5",
+    "@mlc-ai/web-llm": "^0.2.84",
     "codemirror": "^6.0.2",
     "dompurify": "^3.4.11",
     "jszip": "^3.10.1",
