@@ -203,6 +203,7 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
                 // Import raw knowledge files to IndexedDB
                 const knowledgeFilesFolder = zip.folder("Knowledge/Files");
                 if (knowledgeFilesFolder) {
+                    const savePromises = [];
                     const knowledgePromises = [];
                     for (let relativePath in knowledgeFilesFolder.files) {
                         const zipEntry = knowledgeFilesFolder.files[relativePath];
@@ -212,6 +213,10 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
                                 const fileName = relativePath.split('/').pop() || relativePath;
                                 return saveKnowledgeFile(newAspect.id, fileName, fileText);
                             });
+                            savePromises.push(p);
+                        }
+                    }
+                    await Promise.all(savePromises);
                             knowledgePromises.push(p);
                         }
                     }
