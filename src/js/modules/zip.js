@@ -218,7 +218,6 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
                     }
                     await Promise.all(promises);
                     const savePromises = [];
-                    const knowledgePromises = [];
                     for (let relativePath in knowledgeFilesFolder.files) {
                         const zipEntry = knowledgeFilesFolder.files[relativePath];
                         if (!zipEntry.dir) {
@@ -231,10 +230,6 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
                         }
                     }
                     await Promise.all(savePromises);
-                            knowledgePromises.push(p);
-                        }
-                    }
-                    await Promise.all(knowledgePromises);
                 }
 
                 renderAspectList();
