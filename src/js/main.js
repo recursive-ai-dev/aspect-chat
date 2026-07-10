@@ -1,3 +1,5 @@
+import { toggleAdvancedMode, updateBasicInstructions } from './modules/ui.js';
+import './modules/workflowBuilder.js';
 import { state } from './modules/state.js';
 window.state = state;
 import { saveKnowledgeFile } from './modules/db.js';
@@ -27,7 +29,6 @@ import { initToolEditor } from './modules/toolEditor.js';
 import { showChatView } from './modules/ui.js';
 import { processAIResponseAndTools } from './modules/tools.js';
 import { getGenericIcon } from './modules/aspects.js';
-import { closeWelcomeModal } from './modules/ui.js';
 import { onProviderSelect } from './modules/settings.js';
 import { init } from './modules/init.js';
 import { fetchModelsIfPossible } from './modules/settings.js';
@@ -38,7 +39,6 @@ import { uploadIcon } from './modules/ui.js';
 import { saveAspectsToLocalStorage } from './modules/state.js';
 import { uploadCreateIcon } from './modules/aspects.js';
 import { updateSystemLog } from './modules/tools.js';
-import { nextPage } from './modules/ui.js';
 import { cancelCreateAspect } from './modules/aspects.js';
 import { selectAspect } from './modules/aspects.js';
 import { escapeHtml } from './modules/chat.js';
@@ -81,8 +81,6 @@ window.insertToolTag = insertToolTag;
 window.addSystemLog = addSystemLog;
 window.updateSystemLog = updateSystemLog;
 window.markChangesUnsaved = markChangesUnsaved;
-window.nextPage = nextPage;
-window.closeWelcomeModal = closeWelcomeModal;
 window.showEditorView = showEditorView;
 window.showChatView = showChatView;
 window.uploadIcon = uploadIcon;
@@ -104,7 +102,9 @@ window.exportAspectToWebpage = exportAspectToWebpage;
 window.loadAspectFile = loadAspectFile;
 window.openSystemToolsModal = openSystemToolsModal;
 
-document.addEventListener('DOMContentLoaded', () => {
-    init();
+document.addEventListener('DOMContentLoaded', async () => {
+    await init();
     initToolEditor();
 });
+window.toggleAdvancedMode = toggleAdvancedMode;
+window.updateBasicInstructions = updateBasicInstructions;

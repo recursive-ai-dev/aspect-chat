@@ -71,6 +71,8 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
 
             // Export raw knowledge files from IndexedDB
             const rawKnowledgeFiles = await getKnowledgeFilesRaw(aspect.id);
+            zip.file("memory.json", JSON.stringify(aspect.memory || {}, null, 2));
+
             if (rawKnowledgeFiles && rawKnowledgeFiles.length > 0) {
                 const knowledgeFolder = zip.folder("Knowledge/Files");
                 rawKnowledgeFiles.forEach(f => {
@@ -157,6 +159,16 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
                     await Promise.all(promises);
                 }
 
+                let memory = {};
+                if (zip.file("memory.json")) {
+                    const memoryStr = await zip.file("memory.json").async("string");
+                    try {
+                        memory = JSON.parse(memoryStr);
+                    } catch (e) {
+                        console.error("Failed to parse memory.json");
+                    }
+                }
+
                 const chatHistory = [];
                 if (zip.file("ChatHistory/History.md")) {
                     const histMd = await zip.file("ChatHistory/History.md").async("string");
@@ -181,6 +193,7 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
                     icon,
                     background,
                     tools,
+                    memory,
                     chatHistory
                 };
 

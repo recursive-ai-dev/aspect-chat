@@ -7,6 +7,49 @@ import { getCurrentAspect } from './aspects.js';
 import { state } from './state.js';
 
 
+
+        export async function fetchAIResponseForAspect(aspect, prompt) {
+            if (!state.settings.apiUrl || !state.settings.apiKey) {
+                throw new Error("API credentials not configured.");
+            }
+
+            const extraFileText = await getKnowledgeFilesText(aspect.id);
+            let systemPrompt = `${aspect.instructions}\n\n# Knowledge Bank\n${aspect.knowledge || 'None.'}${extraFileText}`;
+
+            const apiMessages = [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: prompt }
+            ];
+
+            let endpoint = state.settings.apiUrl.trim();
+            if (!endpoint.endsWith('/chat/completions') && !endpoint.endsWith('/chat/completions/')) {
+                endpoint = endpoint.replace(/\/+$/, '') + '/chat/completions';
+            }
+
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${state.settings.apiKey}`
+                },
+                body: JSON.stringify({
+                    model: state.settings.model,
+                    messages: apiMessages,
+                    temperature: 0.7,
+                    stream: false // Non-streaming for summons
+                })
+            });
+
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({}));
+                const errMsg = errData.error?.message || response.statusText;
+                throw new Error(`API error ${response.status}: ${errMsg}`);
+            }
+
+            const data = await response.json();
+            return data.choices[0].message.content;
+        }
+
         export async function executeJavaScriptTool(toolName, argStr) {
             const aspect = getCurrentAspect();
             const tool = aspect.tools.find(t => t.name === toolName);
@@ -26,7 +69,11 @@ import { state } from './state.js';
                 // Construct safe asynchronous wrapper using Web Worker to sandbox execution
                 const workerCode = `
                     self.onmessage = async function(e) {
-                        const { args, state } = e.data;
+                        if (e.data.type === 'memoryWriteComplete') return; // Handled by tool listener
+                        if (e.data.type === 'summonComplete') return; // Handled by tool listener
+                        const { args, state, memory } = e.data;
+                        self.aspectMemory = memory;
+
                         try {
                             ${tool.code}
                             if (typeof executeTool === 'function') {
@@ -48,9 +95,36 @@ import { state } from './state.js';
                 if (!tool.state) tool.state = {};
                 
                 const result = await new Promise((resolve, reject) => {
-                    worker.onmessage = (e) => {
+                    worker.onmessage = async (e) => {
+                        if (e.data.type === 'writeMemory') {
+                            import('./db.js').then(async (dbModule) => {
+                                if (!aspect.memory) aspect.memory = {};
+                                aspect.memory[e.data.key] = e.data.value;
+                                await dbModule.saveMemory(aspect.id, aspect.memory);
+                                worker.postMessage({ type: 'memoryWriteComplete', messageId: e.data.messageId });
+                            });
+                            return; // Keep worker alive for the final result
+                        }
+
+                        if (e.data.type === 'summonAspect') {
+                            const { aspectName, prompt, messageId } = e.data;
+                            const targetAspect = state.aspects.find(a => a.name.toLowerCase() === aspectName.toLowerCase());
+                            if (!targetAspect) {
+                                worker.postMessage({ type: 'summonComplete', messageId, error: `Aspect '${aspectName}' not found.` });
+                                return;
+                            }
+
+                            try {
+                                const response = await fetchAIResponseForAspect(targetAspect, prompt);
+                                worker.postMessage({ type: 'summonComplete', messageId, response });
+                            } catch (err) {
+                                worker.postMessage({ type: 'summonComplete', messageId, error: err.message });
+                            }
+                            return; // Keep worker alive
+                        }
+
                         if (e.data.success) {
-                            tool.state = e.data.state; // Persist updated state
+                            tool.state = e.data.state; // Update state
                             markChangesUnsaved();
                             resolve(e.data.result);
                         } else {
@@ -64,7 +138,7 @@ import { state } from './state.js';
                         worker.terminate();
                         URL.revokeObjectURL(workerUrl);
                     };
-                    worker.postMessage({ args: parsedArgs, state: tool.state });
+                    worker.postMessage({ args: parsedArgs, state: tool.state, memory: aspect.memory || {} });
                 });
                 return typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result);
             } catch (err) {
@@ -97,6 +171,7 @@ import { state } from './state.js';
             }
         }
 
+
         export async function processAIResponseAndTools(aiMessage, aspect) {
             if (aiMessage === null || aiMessage === undefined) {
                 aiMessage = "";
@@ -125,19 +200,40 @@ import { state } from './state.js';
             markChangesUnsaved();
 
             let toolResultsText = "";
+            let newAgenticToolCalls = [];
+
             for (let tc of toolCalls) {
                 const logId = addSystemLog(`Executing tool \`${tc.name}\`...`);
                 const result = await getCachedOrExecuteTool(tc.name, tc.args);
                 updateSystemLog(logId, `🛠️ **Tool Executed:** \`${tc.name}\`\n\n**Result:**\n\`\`\`json\n${result}\n\`\`\``);
                 toolResultsText += `Tool ${tc.name} returned:\n${result}\n\n`;
+
+                // Agentic loop: check if the tool returned an instruction to call another tool
+                let innerMatch;
+                const innerToolCallRegex = /\[Run Tool:\s*([a-zA-Z0-9_\-\.]+)(?:\((.*?)\))?\s*\]/g;
+                while ((innerMatch = innerToolCallRegex.exec(result)) !== null) {
+                    newAgenticToolCalls.push({
+                        fullMatch: innerMatch[0],
+                        name: innerMatch[1],
+                        args: innerMatch[2] || ""
+                    });
+                }
             }
 
             if (!state.consecutiveToolRuns) state.consecutiveToolRuns = 0;
             state.consecutiveToolRuns++;
             
-            if (state.consecutiveToolRuns > 5) {
-                addSystemLog("⚠️ Loop protection triggered: Maximum of 5 consecutive tool runs reached.");
+            if (state.consecutiveToolRuns > 15) {
+                addSystemLog("⚠️ Loop protection triggered: Maximum of 15 consecutive tool runs reached.");
                 state.consecutiveToolRuns = 0;
+                return;
+            }
+
+            if (newAgenticToolCalls.length > 0) {
+                // If tools returned new tools to run, immediately run them by spoofing an AI response containing them
+                let spoofedMessage = newAgenticToolCalls.map(tc => tc.fullMatch).join("\n");
+                addSystemLog("⚡ **Agentic Loop triggered**: Tool requested immediate execution of another tool.");
+                await processAIResponseAndTools(spoofedMessage, aspect);
                 return;
             }
 
@@ -300,6 +396,7 @@ import { state } from './state.js';
             }
         }
 
+
         export async function sendMessage() {
             const input = document.getElementById('chat-input');
             const text = input.value.trim();
@@ -308,11 +405,50 @@ import { state } from './state.js';
             const aspect = getCurrentAspect();
             if (!aspect) return;
             
+            // Check for @AspectName mention at the beginning
+            const summonMatch = text.match(/^@([a-zA-Z0-9_\-]+)\s+(.*)$/s);
+            if (summonMatch) {
+                const targetName = summonMatch[1];
+                const prompt = summonMatch[2];
+                const targetAspect = state.aspects.find(a => a.name.toLowerCase() === targetName.toLowerCase());
+
+                if (targetAspect) {
+                    aspect.chatHistory.push({ role: 'user', content: text });
+                    renderChatMessages();
+                    markChangesUnsaved();
+
+                    const logId = addSystemLog(`Summoning \`${targetAspect.name}\`...`);
+                    document.getElementById('send-btn').disabled = true;
+
+                    try {
+                        const response = await fetchAIResponseForAspect(targetAspect, prompt);
+
+                        updateSystemLog(logId, `✨ **${targetAspect.name} responds:**
+
+${response}`);
+
+                        // Let the current aspect know about this interaction
+                        const extraContext = `User summoned ${targetAspect.name} with prompt: "${prompt}".\n${targetAspect.name} responded: "${response}"`;
+
+                        document.getElementById('send-btn').disabled = false;
+                        input.value = '';
+                        input.style.height = 'auto';
+                        await sendAIRequest(extraContext);
+                        return;
+                    } catch (err) {
+                        updateSystemLog(logId, `❌ **Failed to summon ${targetAspect.name}:** ${err.message}`);
+                        document.getElementById('send-btn').disabled = false;
+                        return;
+                    }
+                }
+            }
+
             aspect.chatHistory.push({ role: 'user', content: text });
             input.value = '';
             input.style.height = 'auto'; // Reset textarea height
             renderChatMessages();
             markChangesUnsaved();
+
 
             state.consecutiveToolRuns = 0;
 

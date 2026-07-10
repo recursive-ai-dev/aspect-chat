@@ -886,3 +886,30 @@
             gap: 10px;
         }
 
+
+
+        /* --- TEMPLATE GALLERY --- */
+        .template-card {
+            border: 3px solid var(--border-color);
+            border-radius: 12px;
+            padding: 15px;
+            background: var(--bg-input);
+            cursor: pointer;
+            transition: all 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            box-shadow: var(--shadow-cartoon-sm);
+        }
+        .template-card:hover {
+            transform: translate(-2px, -2px);
+            box-shadow: var(--shadow-cartoon);
+            background: var(--accent-primary);
+            color: var(--bg-main);
+        }
+        .template-card h3 {
+            margin-bottom: 8px;
+            font-size: 1.2rem;
+            color: inherit;
+        }
+        .template-card p {
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
