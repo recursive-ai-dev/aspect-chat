@@ -217,6 +217,24 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
                         }
                     }
                     await Promise.all(promises);
+                    const savePromises = [];
+                    const knowledgePromises = [];
+                    for (let relativePath in knowledgeFilesFolder.files) {
+                        const zipEntry = knowledgeFilesFolder.files[relativePath];
+                        if (!zipEntry.dir) {
+                            const p = zipEntry.async('string').then(fileText => {
+                                // Extract just the filename from relative path (if nested, we flatten for IndexedDB)
+                                const fileName = relativePath.split('/').pop() || relativePath;
+                                return saveKnowledgeFile(newAspect.id, fileName, fileText);
+                            });
+                            savePromises.push(p);
+                        }
+                    }
+                    await Promise.all(savePromises);
+                            knowledgePromises.push(p);
+                        }
+                    }
+                    await Promise.all(knowledgePromises);
                 }
 
                 renderAspectList();

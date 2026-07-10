@@ -173,12 +173,12 @@ Keep your responses friendly, concise, and helpful.`,
                     <h3>${template.name}</h3>
                     <p>${template.desc}</p>
                 `;
-                card.onclick = () => acceptCreateAspect(template.id);
+                card.onclick = () => acceptCreateAspectFromTemplate(template.id);
                 gallery.appendChild(card);
             });
         }
 
-        export function acceptCreateAspect(templateId) {
+        export function acceptCreateAspectFromTemplate(templateId) {
             import('./systemTools.js').then(module => {
                 const systemTools = module.systemTools;
                 const template = aspectTemplates.find(t => t.id === templateId) || aspectTemplates[0];
