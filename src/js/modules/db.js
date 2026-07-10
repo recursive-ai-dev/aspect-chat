@@ -44,15 +44,6 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mj
             });
         }
 
-        export async function saveKnowledgeFile(aspectId, name, text) {
-            const db = await dbPromise;
-            return new Promise((resolve, reject) => {
-                const tx = db.transaction('files', 'readwrite');
-                tx.objectStore('files').put({ aspectId, name, text });
-                tx.oncomplete = () => resolve();
-                tx.onerror = (e) => reject(e.target.error);
-            });
-        }
 
         // In-memory cache for performance
         let knowledgeCache = {}; // aspectId -> Array of file objects
