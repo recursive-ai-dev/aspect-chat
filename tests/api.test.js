@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { state } from '../src/js/modules/state.js';
-import { fetchModelsIfPossible } from '../src/js/modules/settings.js';
+import { fetchModelsIfPossible, onProviderSelect } from '../src/js/modules/settings.js';
 
 describe('API Interactions', () => {
     beforeEach(() => {
@@ -46,5 +46,48 @@ describe('API Interactions', () => {
         const select = document.getElementById('api-model-select');
         expect(select.classList.contains('hidden')).toBe(true);
         expect(document.getElementById('api-model-input').classList.contains('hidden')).toBe(false);
+    });
+});
+
+describe('onProviderSelect', () => {
+    beforeEach(() => {
+        document.body.innerHTML = `
+            <input id="api-url-input" value="original-url" />
+            <select id="api-provider-select">
+                <option value="custom">Custom</option>
+                <option value="https://api.openai.com/v1">OpenAI</option>
+            </select>
+            <input id="api-key-input" value="fake-key" />
+            <div id="model-fetch-status"></div>
+            <select id="api-model-select"></select>
+            <input id="api-model-input" type="text" />
+        `;
+        // Mock fetchModelsIfPossible as it gets called inside onProviderSelect
+        global.fetch = vi.fn().mockResolvedValue({
+            ok: true,
+            json: () => Promise.resolve({ data: [] })
+        });
+    });
+
+    it('should update urlInput value if provider is not custom', () => {
+        const providerSelect = document.getElementById('api-provider-select');
+        const urlInput = document.getElementById('api-url-input');
+
+        providerSelect.value = 'https://api.openai.com/v1';
+
+        onProviderSelect();
+
+        expect(urlInput.value).toBe('https://api.openai.com/v1');
+    });
+
+    it('should not update urlInput value if provider is custom', () => {
+        const providerSelect = document.getElementById('api-provider-select');
+        const urlInput = document.getElementById('api-url-input');
+
+        providerSelect.value = 'custom';
+
+        onProviderSelect();
+
+        expect(urlInput.value).toBe('original-url');
     });
 });
