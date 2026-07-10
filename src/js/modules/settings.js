@@ -17,7 +17,7 @@ import { state } from './state.js';
                 localStorage.setItem('provider', state.settings.provider);
             }
             localStorage.setItem('apiUrl', state.settings.apiUrl);
-            sessionStorage.setItem('apiKey', state.settings.apiKey);
+            sessionStorage.removeItem('apiKey');
             localStorage.removeItem('apiKey'); // Security cleanup
             localStorage.setItem('model', state.settings.model);
             localStorage.setItem('maxContext', state.settings.maxContext);

@@ -4,7 +4,7 @@
         export let state = {
             settings: {
                 apiUrl: localStorage.getItem('apiUrl') || '',
-                apiKey: sessionStorage.getItem('apiKey') || '',
+                apiKey: '',
                 model: localStorage.getItem('model') || '',
                 provider: localStorage.getItem('provider') || 'custom',
                 maxContext: parseInt(localStorage.getItem('maxContext')) || 20
