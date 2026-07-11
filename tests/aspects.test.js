@@ -1,5 +1,10 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { state } from '../src/js/modules/state.js';
+import { loadDefaultAspects } from '../src/js/modules/aspects.js';
+import * as ui from '../src/js/modules/ui.js';
+import * as aspects from '../src/js/modules/aspects.js';
+
 
 // Mock ui and state functions before importing aspects.js
 vi.mock('../src/js/modules/ui.js', () => ({
@@ -17,6 +22,7 @@ vi.mock('../src/js/modules/state.js', async (importOriginal) => {
     };
 });
 
+describe('Aspects Management', () => {
 import { state } from '../src/js/modules/state.js';
 import { loadDefaultAspects } from '../src/js/modules/aspects.js';
 import * as ui from '../src/js/modules/ui.js';
@@ -170,4 +176,5 @@ describe('Aspects Module', () => {
             expect(addBtn.innerText).toBe('+ New Aspect');
         });
     });
+});
 });
