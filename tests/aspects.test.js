@@ -3,10 +3,8 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { state } from '../src/js/modules/state.js';
 import { loadDefaultAspects } from '../src/js/modules/aspects.js';
 import * as ui from '../src/js/modules/ui.js';
+import * as aspects from '../src/js/modules/aspects.js';
 
-describe('Aspects Management', () => {
-
-// Mock ui and state functions before importing aspects.js
 vi.mock('../src/js/modules/ui.js', () => ({
     applyAspectBackground: vi.fn(),
     showChatView: vi.fn(),
@@ -22,7 +20,7 @@ vi.mock('../src/js/modules/state.js', async (importOriginal) => {
     };
 });
 
-import * as aspects from '../src/js/modules/aspects.js';
+describe('Aspects Management', () => {
 
 describe('Aspects Module', () => {
     beforeEach(() => {
@@ -172,4 +170,5 @@ describe('Aspects Module', () => {
             expect(addBtn.innerText).toBe('+ New Aspect');
         });
     });
+});
 });
