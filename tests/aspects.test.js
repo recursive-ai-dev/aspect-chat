@@ -23,12 +23,6 @@ vi.mock('../src/js/modules/state.js', async (importOriginal) => {
 });
 
 describe('Aspects Management', () => {
-import { state } from '../src/js/modules/state.js';
-import { loadDefaultAspects } from '../src/js/modules/aspects.js';
-import * as ui from '../src/js/modules/ui.js';
-import * as aspects from '../src/js/modules/aspects.js';
-
-describe('Aspects Module', () => {
     beforeEach(() => {
         // Reset state
         state.aspects = [];
@@ -176,5 +170,4 @@ describe('Aspects Module', () => {
             expect(addBtn.innerText).toBe('+ New Aspect');
         });
     });
-});
 });

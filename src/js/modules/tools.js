@@ -1,9 +1,88 @@
 import { renderChatMessages, createStreamingBubble, updateStreamingBubble } from './chat.js';
 import { getKnowledgeFilesText } from './db.js';
-import { markChangesUnsaved } from './ui.js';
+import { markChangesUnsaved, setChatLoadingState } from './ui.js';
 import { initWebLLMEngine } from './webllm.js';
 import { getCurrentAspect } from './aspects.js';
 import { state } from './state.js';
+export function getApiEndpoint(apiUrl) {
+    let endpoint = apiUrl.trim();
+    if (!endpoint.endsWith('/chat/completions') && !endpoint.endsWith('/chat/completions/')) {
+        endpoint = endpoint.replace(/\/+$/, '') + '/chat/completions';
+    }
+    return endpoint;
+}
+
+export function buildSystemPrompt(aspect, extraFileText) {
+    return `${aspect.instructions}
+
+# Knowledge Bank
+${aspect.knowledge || 'None.'}${extraFileText}`;
+}
+
+export function buildApiMessages(aspect, systemPrompt, extraContext, maxContext) {
+    const apiMessages = [
+        { role: 'system', content: systemPrompt }
+    ];
+
+    const contextMessages = aspect.chatHistory.filter(msg => msg.role === 'user' || msg.role === 'assistant');
+    const slicedMessages = contextMessages.slice(-maxContext);
+
+    slicedMessages.forEach(msg => {
+        apiMessages.push({ role: msg.role === 'user' ? 'user' : 'assistant', content: msg.content });
+    });
+
+    if (extraContext) {
+        apiMessages.push({ role: 'system', content: `[System Notification: The following are results from executed JavaScript tools. Integrate these facts into your final dialogue with the user. Do not call the same tool with identical arguments again.]
+
+${extraContext}` });
+    }
+    return apiMessages;
+}
+
+export async function handleStreamResponse(reader, createStreamingBubble, updateStreamingBubble) {
+    const decoder = new TextDecoder('utf-8');
+    let aiMessage = "";
+    let isFirstChunk = true;
+    let bubbleElement = null;
+    let pendingData = "";
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+            if (bubbleElement) updateStreamingBubble(bubbleElement, aiMessage);
+            break;
+        }
+
+        const chunk = decoder.decode(value, { stream: true });
+        pendingData += chunk;
+        const lines = pendingData.split('\n');
+        pendingData = lines.pop();
+
+        for (let line of lines) {
+            if (line.trim() === '') continue;
+            if (line.startsWith('data: ')) {
+                const dataStr = line.slice(6);
+                if (dataStr === '[DONE]') continue;
+                try {
+                    const data = JSON.parse(dataStr);
+                    if (data.choices && data.choices[0].delta && data.choices[0].delta.content) {
+                        aiMessage += data.choices[0].delta.content;
+
+                        if (isFirstChunk) {
+                            bubbleElement = createStreamingBubble();
+                            isFirstChunk = false;
+                        }
+                        updateStreamingBubble(bubbleElement, aiMessage);
+                    }
+                } catch (e) {
+                    // Ignore partial JSON
+                }
+            }
+        }
+    }
+    return aiMessage;
+}
+
 
 
 
@@ -13,17 +92,14 @@ import { state } from './state.js';
             }
 
             const extraFileText = await getKnowledgeFilesText(aspect.id);
-            let systemPrompt = `${aspect.instructions}\n\n# Knowledge Bank\n${aspect.knowledge || 'None.'}${extraFileText}`;
+            const systemPrompt = buildSystemPrompt(aspect, extraFileText);
 
             const apiMessages = [
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: prompt }
             ];
 
-            let endpoint = state.settings.apiUrl.trim();
-            if (!endpoint.endsWith('/chat/completions') && !endpoint.endsWith('/chat/completions/')) {
-                endpoint = endpoint.replace(/\/+$/, '') + '/chat/completions';
-            }
+            const endpoint = getApiEndpoint(state.settings.apiUrl);
 
             const response = await fetch(endpoint, {
                 method: 'POST',
@@ -263,10 +339,7 @@ import { state } from './state.js';
             const aspect = getCurrentAspect();
             if (!aspect) return;
 
-            document.getElementById('send-btn').disabled = true;
-            document.getElementById('send-btn').classList.add('hidden');
-            document.getElementById('stop-btn').classList.remove('hidden');
-            document.getElementById('chat-input').disabled = true;
+            setChatLoadingState(true);
 
             const writingId = addSystemLog(`*${aspect.name} is reflecting...*`);
             
@@ -278,27 +351,11 @@ import { state } from './state.js';
                 }
 
                 const extraFileText = await getKnowledgeFilesText(aspect.id);
-                let systemPrompt = `${aspect.instructions}\n\n# Knowledge Bank\n${aspect.knowledge || 'None.'}${extraFileText}`;
-                
-                const apiMessages = [
-                    { role: 'system', content: systemPrompt }
-                ];
+                const systemPrompt = buildSystemPrompt(aspect, extraFileText);
+                const apiMessages = buildApiMessages(aspect, systemPrompt, extraContext, state.settings.maxContext);
 
-                const contextMessages = aspect.chatHistory.filter(msg => msg.role === 'user' || msg.role === 'assistant');
-                const slicedMessages = contextMessages.slice(-state.settings.maxContext);
-                
-                slicedMessages.forEach(msg => {
-                    apiMessages.push({ role: msg.role === 'user' ? 'user' : 'assistant', content: msg.content });
-                });
+                const endpoint = getApiEndpoint(state.settings.apiUrl);
 
-                if (extraContext) {
-                    apiMessages.push({ role: 'system', content: `[System Notification: The following are results from executed JavaScript tools. Integrate these facts into your final dialogue with the user. Do not call the same tool with identical arguments again.]\n\n${extraContext}` });
-                }
-
-                let endpoint = state.settings.apiUrl.trim();
-                if (!endpoint.endsWith('/chat/completions') && !endpoint.endsWith('/chat/completions/')) {
-                    endpoint = endpoint.replace(/\/+$/, '') + '/chat/completions';
-                }
                 const response = await fetch(endpoint, {
                     method: 'POST',
                     headers: {
@@ -321,10 +378,6 @@ import { state } from './state.js';
                 }
                 
                 const reader = response.body.getReader();
-                const decoder = new TextDecoder('utf-8');
-                let aiMessage = "";
-                let isFirstChunk = true;
-                let bubbleElement = null;
 
                 const idx = aspect.chatHistory.findIndex(m => m.id === writingId);
                 if (idx !== -1) {
@@ -332,42 +385,9 @@ import { state } from './state.js';
                 }
                 renderChatMessages();
 
-                let pendingData = "";
+                let aiMessage = "";
                 try {
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) {
-                            if (bubbleElement) updateStreamingBubble(bubbleElement, aiMessage); // final render
-                            break;
-                        }
-
-                        const chunk = decoder.decode(value, { stream: true });
-                        pendingData += chunk;
-                        const lines = pendingData.split('\n');
-                        pendingData = lines.pop(); // keep the last incomplete line
-                        
-                        for (let line of lines) {
-                            if (line.trim() === '') continue;
-                            if (line.startsWith('data: ')) {
-                                const dataStr = line.slice(6);
-                                if (dataStr === '[DONE]') continue;
-                                try {
-                                    const data = JSON.parse(dataStr);
-                                    if (data.choices && data.choices[0].delta && data.choices[0].delta.content) {
-                                        aiMessage += data.choices[0].delta.content;
-                                        
-                                        if (isFirstChunk) {
-                                            bubbleElement = createStreamingBubble();
-                                            isFirstChunk = false;
-                                        }
-                                        updateStreamingBubble(bubbleElement, aiMessage);
-                                    }
-                                } catch (e) {
-                                    // Could be partial JSON if SSE chunking is weird
-                                }
-                            }
-                        }
-                    }
+                    aiMessage = await handleStreamResponse(reader, createStreamingBubble, updateStreamingBubble);
                 } catch (e) {
                     if (e.name === 'AbortError') {
                         addSystemLog(`⚠️ **Generation stopped by user.**`);
@@ -385,11 +405,7 @@ import { state } from './state.js';
                 }
                 addSystemLog(`❌ **Error:** ${error.message}`);
             } finally {
-                document.getElementById('send-btn').disabled = false;
-                document.getElementById('send-btn').classList.remove('hidden');
-                document.getElementById('stop-btn').classList.add('hidden');
-                document.getElementById('chat-input').disabled = false;
-                document.getElementById('chat-input').focus();
+                setChatLoadingState(false);
                 renderChatMessages();
                 state.abortController = null;
             }
