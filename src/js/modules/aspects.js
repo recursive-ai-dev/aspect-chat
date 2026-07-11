@@ -169,6 +169,11 @@ Keep your responses friendly, concise, and helpful.`,
             aspectTemplates.forEach(template => {
                 const card = document.createElement('div');
                 card.className = 'template-card';
+                card.innerHTML = `
+                    <h3>${template.name}</h3>
+                    <p>${template.desc}</p>
+                `;
+                card.onclick = () => acceptCreateAspectTemplate(template.id);
 
                 const h3 = document.createElement('h3');
                 h3.textContent = template.name;
