@@ -87,4 +87,16 @@ describe('executeJavaScriptTool', () => {
         const result = await promise;
         expect(result).toBe('invalid json {[');
     });
+
+    it('should return JSON error string when tool is not found', async () => {
+        vi.spyOn(aspectsModule, 'getCurrentAspect').mockReturnValue({
+            id: 'aspect-1',
+            tools: [], // No tools available
+            memory: {}
+        });
+
+        const result = await executeJavaScriptTool('nonExistentTool', 'some args');
+
+        expect(result).toBe(JSON.stringify({ error: `Tool "nonExistentTool" not found.` }));
+    });
 });
