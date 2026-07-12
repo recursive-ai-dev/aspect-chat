@@ -28,7 +28,7 @@ import { loadDefaultAspects } from '../src/js/modules/aspects.js';
 import * as ui from '../src/js/modules/ui.js';
 import * as aspects from '../src/js/modules/aspects.js';
 
-describe('Aspects Module', () => {
+describe('Aspects Management', () => {
     beforeEach(() => {
         // Reset state
         state.aspects = [];
