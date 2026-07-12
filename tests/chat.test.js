@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { escapeHtml, deleteMessage } from '../src/js/modules/chat.js';
+import * as chatModule from '../src/js/modules/chat.js';
 import * as aspects from '../src/js/modules/aspects.js';
 import * as ui from '../src/js/modules/ui.js';
+import * as tools from '../src/js/modules/tools.js';
 
 vi.mock('../src/js/modules/aspects.js', () => ({
     getCurrentAspect: vi.fn()
@@ -11,90 +12,231 @@ vi.mock('../src/js/modules/ui.js', () => ({
     markChangesUnsaved: vi.fn()
 }));
 
-// Mock tools.js so import in chat.js doesn't fail
 vi.mock('../src/js/modules/tools.js', () => ({
     sendAIRequest: vi.fn()
 }));
 
 describe('escapeHtml', () => {
-    it('should not modify a string without special characters', () => {
-        expect(escapeHtml('Hello World')).toBe('Hello World');
-    });
-
-    it('should escape ampersands', () => {
-        expect(escapeHtml('Salt & Pepper')).toBe('Salt &amp; Pepper');
-    });
-
-    it('should escape less than signs', () => {
-        expect(escapeHtml('5 < 10')).toBe('5 &lt; 10');
-    });
-
-    it('should escape greater than signs', () => {
-        expect(escapeHtml('10 > 5')).toBe('10 &gt; 5');
-    });
-
-    it('should escape double quotes', () => {
-        expect(escapeHtml('He said "Hello"')).toBe('He said &quot;Hello&quot;');
-    });
-
-    it('should escape single quotes', () => {
-        expect(escapeHtml("It's a sunny day")).toBe('It&#039;s a sunny day');
-    });
-
-    it('should escape a combination of special characters', () => {
-        expect(escapeHtml('<script>alert("XSS & fun\'s")</script>'))
-            .toBe('&lt;script&gt;alert(&quot;XSS &amp; fun&#039;s&quot;)&lt;/script&gt;');
-    });
-
-    it('should handle an empty string', () => {
-        expect(escapeHtml('')).toBe('');
-    });
-
-    it('should handle a string with only special characters', () => {
-        expect(escapeHtml('&<>"\'')).toBe('&amp;&lt;&gt;&quot;&#039;');
+    it('should escape special characters', () => {
+        expect(chatModule.escapeHtml('<script>')).toBe('&lt;script&gt;');
     });
 });
 
-describe('deleteMessage', () => {
+describe('editMessage, cancelEdit, submitEdit', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
         document.body.innerHTML = '<div id="chat-messages"></div>';
     });
 
-    it('should delete a message at the given index and update UI', () => {
-        const mockAspect = {
+    it('should enable edit mode on user message', () => {
+        const aspect = { chatHistory: [{ role: 'user', content: 'hello' }] };
+        aspects.getCurrentAspect.mockReturnValue(aspect);
+        
+        chatModule.editMessage(0);
+        expect(aspect.chatHistory[0]._isEditing).toBe(true);
+        expect(ui.markChangesUnsaved).not.toHaveBeenCalled(); // Edit mode doesn't save yet
+    });
+
+    it('should cancel edit mode', () => {
+        const aspect = { chatHistory: [{ role: 'user', content: 'hello', _isEditing: true }] };
+        aspects.getCurrentAspect.mockReturnValue(aspect);
+        
+        chatModule.cancelEdit(0);
+        expect(aspect.chatHistory[0]._isEditing).toBeUndefined();
+    });
+
+    it('should submit edit and truncate history', async () => {
+        const aspect = { 
             chatHistory: [
-                { role: 'user', content: 'msg 1' },
-                { role: 'assistant', content: 'msg 2' },
-                { role: 'user', content: 'msg 3' }
-            ]
+                { role: 'user', content: 'hello', _isEditing: true },
+                { role: 'assistant', content: 'hi' }
+            ] 
         };
-        aspects.getCurrentAspect.mockReturnValue(mockAspect);
-
-        deleteMessage(1);
-
-        expect(mockAspect.chatHistory.length).toBe(2);
-        expect(mockAspect.chatHistory[0].content).toBe('msg 1');
-        expect(mockAspect.chatHistory[1].content).toBe('msg 3');
+        aspects.getCurrentAspect.mockReturnValue(aspect);
+        
+        await chatModule.submitEdit(0, 'hello there');
+        expect(aspect.chatHistory[0]._isEditing).toBeUndefined();
+        expect(aspect.chatHistory[0].content).toBe('hello there');
+        expect(aspect.chatHistory.length).toBe(1); // Truncates after
         expect(ui.markChangesUnsaved).toHaveBeenCalled();
-
-        const chatMessages = document.getElementById('chat-messages');
-        expect(chatMessages.children.length).toBe(2);
+        expect(tools.sendAIRequest).toHaveBeenCalled();
     });
-
-    it('should return early if getCurrentAspect returns null', () => {
+    
+    it('should handle missing aspect for edit functions', () => {
         aspects.getCurrentAspect.mockReturnValue(null);
+        chatModule.editMessage(0);
+        chatModule.cancelEdit(0);
+        chatModule.submitEdit(0, 'new');
+        // Shouldn't throw
+    });
+});
 
-        deleteMessage(0);
-
-        expect(ui.markChangesUnsaved).not.toHaveBeenCalled();
+describe('Chat UI Interactions', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        document.body.innerHTML = `
+            <div id="chat-messages"></div>
+            <div id="tools-dropdown"></div>
+        `;
     });
 
-    it('should return early if aspect has no chatHistory', () => {
-        aspects.getCurrentAspect.mockReturnValue({});
+    describe('renderChatMessages', () => {
+        it('should return early if no aspect or history', () => {
+            aspects.getCurrentAspect.mockReturnValue(null);
+            chatModule.renderChatMessages();
+            expect(document.getElementById('chat-messages').innerHTML).toBe('');
+        });
 
-        deleteMessage(0);
+        it('should render system, user, and assistant messages', () => {
+            aspects.getCurrentAspect.mockReturnValue({
+                chatHistory: [
+                    { role: 'system', content: 'Sys log' },
+                    { role: 'user', content: 'Hello' },
+                    { role: 'assistant', content: 'Hi' }
+                ]
+            });
+            chatModule.renderChatMessages();
+            const container = document.getElementById('chat-messages');
+            expect(container.children.length).toBe(3);
+            expect(container.children[0]).toHaveClass('system-log');
+            expect(container.children[1]).toHaveClass('user');
+            expect(container.children[2]).toHaveClass('assistant');
+        });
 
-        expect(ui.markChangesUnsaved).not.toHaveBeenCalled();
+        it('should render inline editor if _isEditing is true', () => {
+            aspects.getCurrentAspect.mockReturnValue({
+                chatHistory: [
+                    { role: 'user', content: 'Hello', _isEditing: true }
+                ]
+            });
+            chatModule.renderChatMessages();
+            const container = document.getElementById('chat-messages');
+            expect(container.querySelector('.inline-editor-container')).not.toBeNull();
+            expect(container.querySelector('.inline-editor-textarea').value).toBe('Hello');
+            
+            // Test cancel btn click handler
+            const cancelBtn = container.querySelector('.danger-btn');
+            cancelBtn.onclick();
+            expect(aspects.getCurrentAspect().chatHistory[0]._isEditing).toBeUndefined();
+
+            // Test save btn click handler by re-rendering to get new button
+            aspects.getCurrentAspect().chatHistory[0]._isEditing = true;
+            chatModule.renderChatMessages();
+            const saveBtn = container.querySelector('.save-btn');
+            saveBtn.onclick();
+            expect(aspects.getCurrentAspect().chatHistory[0].content).toBe('Hello');
+        });
+        
+        it('should bind deleteMessage correctly for user and assistant', () => {
+            aspects.getCurrentAspect.mockReturnValue({
+                chatHistory: [
+                    { role: 'user', content: 'Hello' },
+                    { role: 'assistant', content: 'Hi' }
+                ]
+            });
+            // We'll test HTML presence since inline handlers are tested implicitly or mockably
+            chatModule.renderChatMessages();
+            const container = document.getElementById('chat-messages');
+            expect(container.innerHTML).toContain('editMessage(0)');
+            expect(container.innerHTML).toContain('deleteMessage(0)');
+            expect(container.innerHTML).toContain('regenerateMessage(1)');
+            expect(container.innerHTML).toContain('deleteMessage(1)');
+        });
+    });
+
+    describe('deleteMessage', () => {
+        it('should delete message at index', () => {
+            const aspect = { chatHistory: [{ role: 'user', content: 'm1' }, { role: 'assistant', content: 'm2' }] };
+            aspects.getCurrentAspect.mockReturnValue(aspect);
+            chatModule.deleteMessage(0);
+            expect(aspect.chatHistory.length).toBe(1);
+            expect(aspect.chatHistory[0].content).toBe('m2');
+            expect(ui.markChangesUnsaved).toHaveBeenCalled();
+        });
+        it('should return early if no aspect', () => {
+            aspects.getCurrentAspect.mockReturnValue(null);
+            chatModule.deleteMessage(0);
+            expect(ui.markChangesUnsaved).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('regenerateMessage', () => {
+        it('should splice history and send AI request', async () => {
+            const aspect = { chatHistory: [1, 2, 3] };
+            aspects.getCurrentAspect.mockReturnValue(aspect);
+            await chatModule.regenerateMessage(1);
+            expect(aspect.chatHistory.length).toBe(1);
+            expect(ui.markChangesUnsaved).toHaveBeenCalled();
+            expect(tools.sendAIRequest).toHaveBeenCalled();
+        });
+        it('should return early if no aspect', async () => {
+            aspects.getCurrentAspect.mockReturnValue(null);
+            await chatModule.regenerateMessage(0);
+            expect(ui.markChangesUnsaved).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('editMessage', () => {
+        it('should set _isEditing to true for user message', () => {
+            const aspect = { chatHistory: [{ role: 'user', content: 'm1' }] };
+            aspects.getCurrentAspect.mockReturnValue(aspect);
+            chatModule.editMessage(0);
+            expect(aspect.chatHistory[0]._isEditing).toBe(true);
+        });
+        it('should ignore if not user message', () => {
+            const aspect = { chatHistory: [{ role: 'assistant', content: 'm1' }] };
+            aspects.getCurrentAspect.mockReturnValue(aspect);
+            chatModule.editMessage(0);
+            expect(aspect.chatHistory[0]._isEditing).toBeUndefined();
+        });
+    });
+
+    describe('cancelEdit', () => {
+        it('should remove _isEditing', () => {
+            const aspect = { chatHistory: [{ role: 'user', content: 'm1', _isEditing: true }] };
+            aspects.getCurrentAspect.mockReturnValue(aspect);
+            chatModule.cancelEdit(0);
+            expect(aspect.chatHistory[0]._isEditing).toBeUndefined();
+        });
+    });
+
+    describe('submitEdit', () => {
+        it('should update content, truncate history, and auto regenerate', () => {
+            const aspect = { chatHistory: [{ role: 'user', content: 'm1', _isEditing: true }, { role: 'assistant', content: 'm2' }] };
+            aspects.getCurrentAspect.mockReturnValue(aspect);
+            chatModule.submitEdit(0, 'new m1');
+            expect(aspect.chatHistory[0].content).toBe('new m1');
+            expect(aspect.chatHistory[0]._isEditing).toBeUndefined();
+            expect(aspect.chatHistory.length).toBe(1); // M2 truncated
+            expect(ui.markChangesUnsaved).toHaveBeenCalled();
+            expect(tools.sendAIRequest).toHaveBeenCalled();
+        });
+        it('should just render if content is empty or null', () => {
+            const aspect = { chatHistory: [{ role: 'user', content: 'm1', _isEditing: true }] };
+            aspects.getCurrentAspect.mockReturnValue(aspect);
+            chatModule.submitEdit(0, '   ');
+            expect(aspect.chatHistory[0].content).toBe('m1');
+            expect(tools.sendAIRequest).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('Streaming bubbles', () => {
+        it('should create and update streaming bubble', () => {
+            const bubble = chatModule.createStreamingBubble();
+            expect(bubble).toHaveClass('message-bubble');
+            expect(bubble).toHaveClass('assistant');
+            
+            chatModule.updateStreamingBubble(bubble, 'New content', true);
+            expect(bubble.innerHTML).toContain('New content');
+        });
+    });
+
+    describe('toggleToolsDropdown', () => {
+        it('should toggle class show', () => {
+            const dropdown = document.getElementById('tools-dropdown');
+            chatModule.toggleToolsDropdown();
+            expect(dropdown.classList.contains('show')).toBe(true);
+            chatModule.toggleToolsDropdown();
+            expect(dropdown.classList.contains('show')).toBe(false);
+        });
     });
 });

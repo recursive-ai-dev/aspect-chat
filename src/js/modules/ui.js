@@ -1,9 +1,7 @@
 import { insertToolTag } from './tools.js';
 import { renderChatMessages } from './chat.js';
-import { getGenericIcon } from './aspects.js';
+import { getGenericIcon, renderAspectList, getCurrentAspect, updateAspectData } from './aspects.js';
 import { saveAspectsToLocalStorage } from './state.js';
-import { renderAspectList } from './aspects.js';
-import { getCurrentAspect } from './aspects.js';
 import { systemTools } from './systemTools.js';
 import { state } from './state.js';
 

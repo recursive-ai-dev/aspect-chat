@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { state } from '../src/js/modules/state.js';
+import { state, markChangesUnsaved } from '../src/js/modules/state.js';
 import { loadDefaultAspects } from '../src/js/modules/aspects.js';
 import * as ui from '../src/js/modules/ui.js';
 import * as aspects from '../src/js/modules/aspects.js';
@@ -8,10 +8,12 @@ import * as aspects from '../src/js/modules/aspects.js';
 
 // Mock ui and state functions before importing aspects.js
 vi.mock('../src/js/modules/ui.js', () => ({
-    applyAspectBackground: vi.fn(),
-    showChatView: vi.fn(),
+    renderAspectList: vi.fn(),
     showEditorView: vi.fn(),
-    markChangesUnsaved: vi.fn(),
+    showChatView: vi.fn(),
+    updateToolsDropdown: vi.fn(),
+    applyAspectBackground: vi.fn(),
+    markChangesUnsaved: vi.fn()
 }));
 
 vi.mock('../src/js/modules/state.js', async (importOriginal) => {
@@ -19,14 +21,13 @@ vi.mock('../src/js/modules/state.js', async (importOriginal) => {
     return {
         ...mod,
         saveAspectsToLocalStorage: vi.fn(),
+        markChangesUnsaved: vi.fn()
     };
 });
 
-describe('Aspects Management', () => {
-import { state } from '../src/js/modules/state.js';
-import { loadDefaultAspects } from '../src/js/modules/aspects.js';
-import * as ui from '../src/js/modules/ui.js';
-import * as aspects from '../src/js/modules/aspects.js';
+vi.mock('../src/js/modules/systemTools.js', () => ({
+    systemTools: [ { name: 'Calculator.js', code: 'test' } ]
+}));
 
 describe('Aspects Management', () => {
     beforeEach(() => {
@@ -65,6 +66,98 @@ describe('Aspects Management', () => {
         it('should return a valid data URL containing SVG', () => {
             const icon = aspects.getGenericIcon();
             expect(icon).toContain('data:image/svg+xml;base64,');
+        });
+    });
+
+    describe('getLakesideSageIcon', () => {
+        it('should return a valid data URL containing SVG', () => {
+            expect(aspects.getLakesideSageIcon()).toContain('data:image/svg+xml;base64,');
+        });
+    });
+
+    describe('getStudioGuideIcon', () => {
+        it('should return a valid data URL containing SVG', () => {
+            expect(aspects.getStudioGuideIcon()).toContain('data:image/svg+xml;base64,');
+        });
+    });
+
+    describe('loadDefaultAspects', () => {
+        beforeEach(() => {
+            localStorage.clear();
+        });
+
+        it('should load saved aspects from localStorage if valid', async () => {
+            const savedAspects = [{ id: 'test1', name: 'Saved Aspect' }];
+            localStorage.setItem('aspects_data', JSON.stringify(savedAspects));
+
+            aspects.loadDefaultAspects();
+
+            expect(state.aspects.length).toBe(1);
+            expect(state.currentAspectId).toBe('test1');
+            const ui = await import('../src/js/modules/ui.js');
+            expect(ui.showChatView).toHaveBeenCalled();
+        });
+
+        it('should load default Studio Guide if localStorage is empty', async () => {
+            aspects.loadDefaultAspects();
+
+            expect(state.aspects.length).toBe(1);
+            expect(state.aspects[0].id).toBe('studio-guide');
+            expect(state.currentAspectId).toBe('studio-guide');
+            const ui = await import('../src/js/modules/ui.js');
+            expect(ui.showChatView).toHaveBeenCalled();
+            const stateModule = await import('../src/js/modules/state.js');
+            expect(stateModule.saveAspectsToLocalStorage).toHaveBeenCalled();
+        });
+
+        it('should load default Studio Guide if localStorage is invalid JSON', async () => {
+            localStorage.setItem('aspects_data', 'invalid json');
+            aspects.loadDefaultAspects();
+            expect(state.aspects.length).toBe(1);
+            expect(state.aspects[0].id).toBe('studio-guide');
+        });
+    });
+
+    describe('Aspect Creation', () => {
+        it('should show create aspect modal and render templates', () => {
+            aspects.createNewAspect();
+            expect(document.getElementById('create-aspect-modal')).not.toHaveClass('hidden');
+            const gallery = document.getElementById('template-gallery');
+            expect(gallery.children.length).toBeGreaterThan(0);
+        });
+
+        it('should hide modal on cancelCreateAspect', () => {
+            document.getElementById('create-aspect-modal').classList.remove('hidden');
+            aspects.cancelCreateAspect();
+            expect(document.getElementById('create-aspect-modal')).toHaveClass('hidden');
+        });
+
+        it('should create aspect from input and hide modal', () => {
+            document.getElementById('create-aspect-name-input').value = 'My Custom Aspect';
+            aspects.acceptCreateAspect();
+            
+            expect(state.aspects.length).toBe(1);
+            expect(state.aspects[0].name).toBe('My Custom Aspect');
+            expect(document.getElementById('create-aspect-modal')).toHaveClass('hidden');
+        });
+
+        it('should create aspect from template', async () => {
+            aspects.acceptCreateAspectFromTemplate('data-analyst');
+            
+            // wait for dynamic import to resolve
+            await new Promise(resolve => setTimeout(resolve, 0));
+
+            expect(state.aspects.length).toBe(1);
+            expect(state.aspects[0].name).toBe('The Data Analyst');
+            expect(document.getElementById('create-aspect-modal')).toHaveClass('hidden');
+        });
+
+        it('should upload icon correctly', () => {
+            const mockFile = new Blob(['test'], { type: 'image/png' });
+            mockFile.name = 'test.png';
+            const event = { target: { files: [mockFile] } };
+
+            aspects.uploadCreateIcon(event);
         });
     });
 
@@ -174,6 +267,64 @@ describe('Aspects Management', () => {
             const addBtn = document.getElementById('add-aspect-btn');
             expect(addBtn).not.toBeNull();
             expect(addBtn.innerText).toBe('+ New Aspect');
+        });
+    });
+
+    describe('create aspect functions', () => {
+        beforeEach(() => {
+            document.body.innerHTML += `
+                <div id="create-aspect-modal" class="hidden"></div>
+                <img id="create-aspect-icon-preview" />
+                <div id="create-aspect-icon-filename"></div>
+                <input id="create-aspect-name-input" value="Test Name" />
+                <textarea id="create-aspect-desc-input">Test Desc</textarea>
+            `;
+            state.aspects = [];
+        });
+
+        it('should upload create icon', () => {
+            const file = new File([''], 'test-icon.png', { type: 'image/png' });
+            const event = { target: { files: [file] } };
+            
+            // Mock FileReader
+            const originalFileReader = global.FileReader;
+            global.FileReader = vi.fn().mockImplementation(function() {
+                this.readAsDataURL = vi.fn(function() {
+                    this.onload({ target: { result: 'data:image/png;base64,mock' } });
+                });
+            });
+            
+            aspects.uploadCreateIcon(event);
+            
+            expect(window.tempCreateIcon).toBe('data:image/png;base64,mock');
+            expect(document.getElementById('create-aspect-icon-filename').innerText).toBe('test-icon.png');
+            
+            global.FileReader = originalFileReader;
+        });
+
+        it('should accept create aspect from template', async () => {
+            // Execute template creation
+            aspects.acceptCreateAspectFromTemplate('blank');
+            
+            // Wait for dynamic import promise
+            await new Promise(r => setTimeout(r, 10));
+            
+            expect(state.aspects.length).toBeGreaterThan(0);
+            expect(state.aspects[0].name).toBe('New Aspect');
+            expect(ui.showEditorView).toHaveBeenCalled();
+            expect(ui.markChangesUnsaved).toHaveBeenCalled();
+        });
+
+        it('should accept create aspect', () => {
+            window.tempCreateIcon = 'data:image/png;base64,mock';
+            aspects.acceptCreateAspect();
+            
+            expect(state.aspects.length).toBe(1);
+            expect(state.aspects[0].name).toBe('Test Name');
+            expect(state.aspects[0].description).toBe('Test Desc');
+            expect(state.aspects[0].icon).toBe('data:image/png;base64,mock');
+            expect(ui.showEditorView).toHaveBeenCalled();
+            expect(ui.markChangesUnsaved).toHaveBeenCalled();
         });
     });
 });

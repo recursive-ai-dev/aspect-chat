@@ -1,0 +1,45 @@
+
+> aspect-chat@1.0.0 test
+> vitest run --coverage
+
+
+ RUN  v4.1.10 /root/my-documents/aspect-chat
+      Coverage enabled with v8
+
+ ✓ tests/db.test.js (10 tests) 49ms
+ ✓ tests/zip.test.js (10 tests) 65ms
+ ✓ tests/chat.test.js (20 tests) 96ms
+ ✓ tests/settings.test.js (29 tests) 181ms
+ ✓ tests/tools.test.js (19 tests) 201ms
+ ✓ tests/state.test.js (3 tests) 43ms
+ ✓ tests/aspects.test.js (22 tests) 294ms
+ ✓ tests/api.test.js (4 tests) 70ms
+ ✓ tests/ui.test.js (25 tests) 614ms
+ ✓ tests/calculator.test.js (8 tests) 8ms
+ ✓ tests/webllm.test.js (4 tests) 8ms
+
+ Test Files  11 passed (11)
+      Tests  154 passed (154)
+   Start at  03:12:45
+   Duration  3.00s (transform 671ms, setup 2.95s, import 1.61s, tests 1.63s, environment 8.52s)
+
+ % Coverage report from v8
+-----------------|---------|----------|---------|---------|---------------------
+File             | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s   
+-----------------|---------|----------|---------|---------|---------------------
+All files        |   91.47 |    80.09 |   88.75 |   94.27 |                     
+ src/js/modules  |   91.45 |    80.09 |   88.67 |   94.25 |                     
+  aspects.js     |    96.8 |    73.52 |   88.46 |     100 | ...,229-241,281-283 
+  chat.js        |     100 |    95.74 |     100 |     100 | 165                 
+  db.js          |    94.3 |    81.57 |   83.33 |     100 | ...,101,116-118,149 
+  settings.js    |     100 |    98.33 |     100 |     100 | 15                  
+  state.js       |     100 |      100 |     100 |     100 |                     
+  systemTools.js |     100 |      100 |     100 |     100 |                     
+  tools.js       |   74.62 |    62.16 |      80 |    76.7 | ...-325,375-377,395 
+  ui.js          |   94.91 |    79.36 |   87.87 |     100 | ...,254,271,302-317 
+  webllm.js      |     100 |      100 |     100 |     100 |                     
+  zip.js         |   96.55 |    81.81 |     100 |   98.58 | 27,46               
+ tests/mocks     |     100 |      100 |     100 |     100 |                     
+  handlers.js    |     100 |      100 |     100 |     100 |                     
+  server.js      |     100 |      100 |     100 |     100 |                     
+-----------------|---------|----------|---------|---------|---------------------

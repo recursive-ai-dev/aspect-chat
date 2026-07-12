@@ -1,5 +1,12 @@
 import { vi } from 'vitest';
 import 'fake-indexeddb/auto';
+import '@testing-library/jest-dom';
+import { server } from './mocks/server.js';
+
+// Start MSW Server
+beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
+afterEach(() => server.resetHandlers());
+afterAll(() => server.close());
 
 // Polyfill DOMMatrix for JSDOM
 if (typeof global.DOMMatrix === 'undefined') {

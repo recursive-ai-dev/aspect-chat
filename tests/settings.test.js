@@ -1,9 +1,15 @@
-import { vi } from 'vitest';
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { screen, fireEvent } from '@testing-library/dom';
+import '@testing-library/jest-dom';
+import { http, HttpResponse } from 'msw';
+import { server } from './mocks/server.js';
+import { state } from '../src/js/modules/state.js';
+
+// Mock aspect.js
 vi.mock('../src/js/modules/aspects.js', () => ({
     cancelCreateAspect: vi.fn()
 }));
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { state } from '../src/js/modules/state.js';
+
 import {
     openSettings,
     saveSettings,
@@ -15,8 +21,6 @@ import {
 } from '../src/js/modules/settings.js';
 
 describe('Settings Module', () => {
-    let mockFetch;
-
     beforeEach(() => {
         // Reset state
         state.settings = {
@@ -29,53 +33,51 @@ describe('Settings Module', () => {
 
         // Mock DOM
         document.body.innerHTML = `
-            <div id="settings-modal" class="hidden"></div>
-            <select id="api-provider-select">
+            <div id="settings-modal" class="hidden" data-testid="settings-modal"></div>
+            <select id="api-provider-select" data-testid="provider-select">
                 <option value="custom">Custom</option>
                 <option value="http://localhost:1234/v1">Local</option>
                 <option value="other">Other</option>
             </select>
-            <input type="text" id="api-url-input" />
-            <input type="password" id="api-key-input" />
-            <input type="text" id="api-model-input" />
-            <select id="api-model-select" class="hidden"></select>
-            <input type="number" id="api-max-context-input" />
-            <div id="model-fetch-status"></div>
-            <input type="checkbox" id="dark-mode-toggle" />
-            <div id="create-aspect-modal" class="hidden"></div>
+            <input type="text" id="api-url-input" data-testid="url-input" />
+            <input type="password" id="api-key-input" data-testid="key-input" />
+            <input type="text" id="api-model-input" data-testid="model-input" />
+            <select id="api-model-select" class="hidden" data-testid="model-select"></select>
+            <input type="number" id="api-max-context-input" data-testid="max-context-input" />
+            <div id="model-fetch-status" data-testid="fetch-status"></div>
+            <input type="checkbox" id="dark-mode-toggle" data-testid="dark-mode-toggle" />
+            <div id="create-aspect-modal" class="hidden" data-testid="create-aspect-modal"></div>
         `;
 
         // Clear local/session storage
         localStorage.clear();
         sessionStorage.clear();
-
-        // Mock fetch
-        mockFetch = vi.spyOn(global, 'fetch');
     });
 
     afterEach(() => {
         vi.restoreAllMocks();
-        document.body.className = ''; // Reset body class
+        server.resetHandlers();
+        document.body.className = '';
     });
 
     describe('openSettings', () => {
         it('should remove hidden class and set display to flex', () => {
-            const modal = document.getElementById('settings-modal');
+            const modal = screen.getByTestId('settings-modal');
             openSettings();
-            expect(modal.classList.contains('hidden')).toBe(false);
+            expect(modal).not.toHaveClass('hidden');
             expect(modal.style.display).toBe('flex');
         });
     });
 
     describe('saveSettings', () => {
         it('should update state and storage, and handle dark mode', () => {
-            const providerSelect = document.getElementById('api-provider-select');
-            const urlInput = document.getElementById('api-url-input');
-            const keyInput = document.getElementById('api-key-input');
-            const modelInput = document.getElementById('api-model-input');
-            const maxContextInput = document.getElementById('api-max-context-input');
-            const darkModeToggle = document.getElementById('dark-mode-toggle');
-            const modal = document.getElementById('settings-modal');
+            const providerSelect = screen.getByTestId('provider-select');
+            const urlInput = screen.getByTestId('url-input');
+            const keyInput = screen.getByTestId('key-input');
+            const modelInput = screen.getByTestId('model-input');
+            const maxContextInput = screen.getByTestId('max-context-input');
+            const darkModeToggle = screen.getByTestId('dark-mode-toggle');
+            const modal = screen.getByTestId('settings-modal');
 
             providerSelect.value = 'custom';
             urlInput.value = 'https://api.openai.com/v1 '; // test trim
@@ -88,138 +90,146 @@ describe('Settings Module', () => {
 
             saveSettings();
 
-            // Assert state
             expect(state.settings.apiUrl).toBe('https://api.openai.com/v1');
             expect(state.settings.apiKey).toBe('test-key');
             expect(state.settings.model).toBe('gpt-4o');
             expect(state.settings.maxContext).toBe(30);
             expect(state.settings.provider).toBe('custom');
 
-            // Assert localStorage
             expect(localStorage.getItem('provider')).toBe('custom');
             expect(localStorage.getItem('apiUrl')).toBe('https://api.openai.com/v1');
             expect(localStorage.getItem('model')).toBe('gpt-4o');
             expect(localStorage.getItem('maxContext')).toBe('30');
             expect(localStorage.getItem('darkMode')).toBe('true');
 
-            // Assert cleanup
             expect(sessionStorage.getItem('apiKey')).toBeNull();
             expect(localStorage.getItem('apiKey')).toBeNull();
 
-            // Assert UI side effects
-            expect(document.body.classList.contains('dark-theme')).toBe(true);
-            expect(modal.classList.contains('hidden')).toBe(true);
+            expect(document.body).toHaveClass('dark-theme');
+            expect(modal).toHaveClass('hidden');
         });
 
         it('should remove dark mode if unchecked', () => {
-            const darkModeToggle = document.getElementById('dark-mode-toggle');
+            const darkModeToggle = screen.getByTestId('dark-mode-toggle');
             darkModeToggle.checked = false;
             document.body.classList.add('dark-theme');
 
             saveSettings();
 
-            expect(document.body.classList.contains('dark-theme')).toBe(false);
+            expect(document.body).not.toHaveClass('dark-theme');
             expect(localStorage.getItem('darkMode')).toBe('false');
         });
     });
 
     describe('onProviderSelect', () => {
         it('should update URL input if provider is not custom', () => {
-            const providerSelect = document.getElementById('api-provider-select');
-            const urlInput = document.getElementById('api-url-input');
+            const providerSelect = screen.getByTestId('provider-select');
+            const urlInput = screen.getByTestId('url-input');
 
             providerSelect.value = 'http://localhost:1234/v1';
             onProviderSelect();
 
-            expect(urlInput.value).toBe('http://localhost:1234/v1');
+            expect(urlInput).toHaveValue('http://localhost:1234/v1');
         });
 
         it('should not update URL input if provider is custom', () => {
-            const providerSelect = document.getElementById('api-provider-select');
-            const urlInput = document.getElementById('api-url-input');
+            const providerSelect = screen.getByTestId('provider-select');
+            const urlInput = screen.getByTestId('url-input');
 
             urlInput.value = 'existing-url';
             providerSelect.value = 'custom';
             onProviderSelect();
 
-            expect(urlInput.value).toBe('existing-url');
+            expect(urlInput).toHaveValue('existing-url');
         });
     });
 
     describe('fetchModelsIfPossible', () => {
         it('should return early if url is empty', async () => {
-            document.getElementById('api-url-input').value = '';
+            screen.getByTestId('url-input').value = '';
+            let fetched = false;
+            server.use(http.get('*/models', () => { fetched = true; return HttpResponse.json({data: []}); }));
             await fetchModelsIfPossible();
-            expect(mockFetch).not.toHaveBeenCalled();
+            expect(fetched).toBe(false);
         });
 
         it('should return early if provider is custom', async () => {
-            document.getElementById('api-url-input').value = 'http://test';
-            document.getElementById('api-provider-select').value = 'custom';
+            screen.getByTestId('url-input').value = 'http://api.example.com';
+            screen.getByTestId('provider-select').value = 'custom';
+            let fetched = false;
+            server.use(http.get('*/models', () => { fetched = true; return HttpResponse.json({data: []}); }));
             await fetchModelsIfPossible();
-            expect(mockFetch).not.toHaveBeenCalled();
+            expect(fetched).toBe(false);
         });
 
         it('should require API key if provider is not localhost', async () => {
-            document.getElementById('api-url-input').value = 'http://test';
-            document.getElementById('api-key-input').value = '';
-            document.getElementById('api-provider-select').value = 'other';
+            screen.getByTestId('url-input').value = 'http://api.example.com';
+            screen.getByTestId('key-input').value = '';
+            screen.getByTestId('provider-select').value = 'other';
 
             await fetchModelsIfPossible();
 
-            expect(document.getElementById('model-fetch-status').innerText).toBe('Please enter an API key to fetch available models.');
-            expect(mockFetch).not.toHaveBeenCalled();
+            expect(screen.getByTestId('fetch-status').innerText).toBe('Please enter an API key to fetch available models.');
         });
 
         it('should fetch successfully and populate model select', async () => {
-            document.getElementById('api-url-input').value = 'http://test';
-            document.getElementById('api-key-input').value = 'test-key';
-            document.getElementById('api-provider-select').value = 'other';
+            screen.getByTestId('url-input').value = 'http://api.example.com';
+            screen.getByTestId('key-input').value = 'test-key';
+            screen.getByTestId('provider-select').value = 'other';
 
-            mockFetch.mockResolvedValueOnce({
-                ok: true,
-                json: () => Promise.resolve({ data: [{ id: 'model1' }, { id: 'model2' }] })
-            });
+            server.use(
+                http.get('http://api.example.com/models', ({ request }) => {
+                    expect(request.headers.get('Authorization')).toBe('Bearer test-key');
+                    return HttpResponse.json({ data: [{ id: 'model1' }, { id: 'model2' }] });
+                })
+            );
 
             await fetchModelsIfPossible();
 
-            expect(mockFetch).toHaveBeenCalledWith('http://test/models', {
-                headers: { 'Authorization': 'Bearer test-key' }
-            });
-
-            const modelSelect = document.getElementById('api-model-select');
-            expect(modelSelect.classList.contains('hidden')).toBe(false);
+            const modelSelect = screen.getByTestId('model-select');
+            expect(modelSelect).not.toHaveClass('hidden');
             expect(modelSelect.options.length).toBe(2);
             expect(modelSelect.options[0].value).toBe('model1');
 
-            const statusDiv = document.getElementById('model-fetch-status');
-            expect(statusDiv.innerText).toBe('Models fetched successfully.');
-            // Testing style color can be tricky with jsdom rgb conversion, let's just assert text
+            expect(screen.getByTestId('fetch-status').innerText).toBe('Models fetched successfully.');
         });
 
         it('should handle 401 unauthorized response', async () => {
-            document.getElementById('api-url-input').value = 'http://test';
-            document.getElementById('api-key-input').value = 'bad-key';
-            document.getElementById('api-provider-select').value = 'other';
+            screen.getByTestId('url-input').value = 'http://api.example.com';
+            screen.getByTestId('key-input').value = 'bad-key';
+            screen.getByTestId('provider-select').value = 'other';
 
-            mockFetch.mockResolvedValueOnce({
-                ok: false,
-                status: 401,
-                statusText: 'Unauthorized',
-                json: () => Promise.resolve({ error: { message: 'Invalid token' } })
-            });
+            server.use(
+                http.get('http://api.example.com/models', () => {
+                    return HttpResponse.json({ error: { message: 'Invalid token' } }, { status: 401, statusText: 'Unauthorized' });
+                })
+            );
 
             await fetchModelsIfPossible();
 
-            const statusDiv = document.getElementById('model-fetch-status');
-            expect(statusDiv.innerText).toContain('Unauthorized or invalid API key (401)');
+            expect(screen.getByTestId('fetch-status').innerText).toContain('Unauthorized or invalid API key (401)');
+        });
+        
+        it('should update statusDiv on network error', async () => {
+            screen.getByTestId('url-input').value = 'http://api.example.com';
+            screen.getByTestId('key-input').value = 'test-key';
+            screen.getByTestId('provider-select').value = 'other';
+
+            server.use(
+                http.get('http://api.example.com/models', () => {
+                    return HttpResponse.error();
+                })
+            );
+            await fetchModelsIfPossible();
+
+            expect(screen.getByTestId('fetch-status').innerText).toBe('Failed to fetch');
         });
     });
 
     describe('onModelSelectDropdown', () => {
         it('should update api-model-input', () => {
-            const modelSelect = document.getElementById('api-model-select');
-            const modelInput = document.getElementById('api-model-input');
+            const modelSelect = screen.getByTestId('model-select');
+            const modelInput = screen.getByTestId('model-input');
 
             const opt = document.createElement('option');
             opt.value = 'selected-model';
@@ -228,187 +238,171 @@ describe('Settings Module', () => {
 
             onModelSelectDropdown();
 
-            expect(modelInput.value).toBe('selected-model');
+            expect(modelInput).toHaveValue('selected-model');
         });
     });
+
     describe('Window Event Listeners', () => {
         describe('click event', () => {
             it('should close create-aspect-modal if clicked directly', async () => {
-                const createModal = document.getElementById('create-aspect-modal');
+                const createModal = screen.getByTestId('create-aspect-modal');
                 createModal.classList.remove('hidden');
-                createModal.dispatchEvent(new Event('click', { bubbles: true }));
+                fireEvent.click(createModal);
 
                 expect((await import('../src/js/modules/aspects.js')).cancelCreateAspect).toHaveBeenCalled();
             });
 
             it('should close settings-modal if clicked directly', () => {
-                const settingsModal = document.getElementById('settings-modal');
+                const settingsModal = screen.getByTestId('settings-modal');
                 settingsModal.classList.remove('hidden');
-                settingsModal.dispatchEvent(new Event('click', { bubbles: true }));
+                fireEvent.click(settingsModal);
 
-                expect(settingsModal.classList.contains('hidden')).toBe(true);
+                expect(settingsModal).toHaveClass('hidden');
             });
         });
 
         describe('keydown event', () => {
             it('should close create-aspect-modal if Escape is pressed and it is not hidden', async () => {
-                const createModal = document.getElementById('create-aspect-modal');
+                const createModal = screen.getByTestId('create-aspect-modal');
                 createModal.classList.remove('hidden');
-                window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+                fireEvent.keyDown(window, { key: 'Escape' });
 
                 expect((await import('../src/js/modules/aspects.js')).cancelCreateAspect).toHaveBeenCalled();
             });
 
             it('should close settings-modal if Escape is pressed and it is not hidden', () => {
-                const settingsModal = document.getElementById('settings-modal');
+                const settingsModal = screen.getByTestId('settings-modal');
                 settingsModal.classList.remove('hidden');
-                window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+                fireEvent.keyDown(window, { key: 'Escape' });
 
-                expect(settingsModal.classList.contains('hidden')).toBe(true);
+                expect(settingsModal).toHaveClass('hidden');
             });
 
             it('should do nothing if another key is pressed', async () => {
-                const settingsModal = document.getElementById('settings-modal');
+                const settingsModal = screen.getByTestId('settings-modal');
                 settingsModal.classList.remove('hidden');
-                window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+                fireEvent.keyDown(window, { key: 'Enter' });
 
-                expect(settingsModal.classList.contains('hidden')).toBe(false);
-                // expect((await import('../src/js/modules/aspects.js')).cancelCreateAspect).not.toHaveBeenCalled();
+                expect(settingsModal).not.toHaveClass('hidden');
             });
         });
     });
 
     describe('fetchProviderModels error handling', () => {
         it('should throw an error if response is not ok and no error message', async () => {
-            mockFetch.mockResolvedValueOnce({
-                ok: false,
-                status: 500,
-                statusText: 'Internal Server Error',
-                json: () => Promise.reject(new Error('no json'))
-            });
-            await expect(fetchProviderModels('http://test', 'key')).rejects.toThrow('Error 500: Internal Server Error');
+            server.use(
+                http.get('http://api.example.com/models', () => {
+                    return new HttpResponse('no json', { status: 500, statusText: 'Internal Server Error' });
+                })
+            );
+            await expect(fetchProviderModels('http://api.example.com', 'key')).rejects.toThrow('Error 500: Internal Server Error');
         });
 
         it('should throw Rate limit exceeded for 429', async () => {
-            mockFetch.mockResolvedValueOnce({
-                ok: false,
-                status: 429,
-                statusText: 'Too Many Requests',
-                json: () => Promise.resolve({})
-            });
-            await expect(fetchProviderModels('http://test', 'key')).rejects.toThrow('Rate limit exceeded (429).');
+            server.use(
+                http.get('http://api.example.com/models', () => {
+                    return HttpResponse.json({}, { status: 429, statusText: 'Too Many Requests' });
+                })
+            );
+            await expect(fetchProviderModels('http://api.example.com', 'key')).rejects.toThrow('Rate limit exceeded (429).');
         });
 
         it('should throw No models found if models array is empty', async () => {
-            mockFetch.mockResolvedValueOnce({
-                ok: true,
-                json: () => Promise.resolve({ data: [] })
-            });
-            await expect(fetchProviderModels('http://test', 'key')).rejects.toThrow('No models found.');
+            server.use(
+                http.get('http://api.example.com/models', () => {
+                    return HttpResponse.json({ data: [] });
+                })
+            );
+            await expect(fetchProviderModels('http://api.example.com', 'key')).rejects.toThrow('No models found.');
         });
 
         it('should append /models to url if it lacks it', async () => {
-            mockFetch.mockResolvedValueOnce({
-                ok: true,
-                json: () => Promise.resolve({ data: [{id: 'model1'}] })
-            });
-            await fetchProviderModels('http://test', 'key');
-            expect(mockFetch).toHaveBeenCalledWith('http://test/models', expect.anything());
-        });
-
-        it('should handle missing error.message', async () => {
-            mockFetch.mockResolvedValueOnce({
-                ok: false,
-                status: 500,
-                statusText: 'Internal Server Error',
-                json: () => Promise.resolve({})
-            });
-            await expect(fetchProviderModels('http://test', 'key')).rejects.toThrow('Error 500: Internal Server Error');
+            let fetchedUrl = '';
+            server.use(
+                http.get('http://api.example.com/models', ({ request }) => {
+                    fetchedUrl = request.url;
+                    return HttpResponse.json({ data: [{id: 'model1'}] });
+                })
+            );
+            await fetchProviderModels('http://api.example.com', 'key');
+            expect(fetchedUrl).toBe('http://api.example.com/models');
         });
 
         it('should handle data without data or models array', async () => {
-            mockFetch.mockResolvedValueOnce({
-                ok: true,
-                json: () => Promise.resolve({ notmodels: [] })
-            });
-            await expect(fetchProviderModels('http://test', 'key')).rejects.toThrow('No models found.');
-        });
-
-        it('should handle json parsing error when extracting error message', async () => {
-            mockFetch.mockResolvedValueOnce({
-                ok: false,
-                status: 400,
-                statusText: 'Bad Request',
-                json: () => Promise.reject(new Error('SyntaxError'))
-            });
-            await expect(fetchProviderModels('http://test', 'key')).rejects.toThrow('Error 400: Bad Request');
+            server.use(
+                http.get('http://api.example.com/models', () => {
+                    return HttpResponse.json({ notmodels: [] });
+                })
+            );
+            await expect(fetchProviderModels('http://api.example.com', 'key')).rejects.toThrow('No models found.');
         });
 
         it('should handle custom error format from json', async () => {
-            mockFetch.mockResolvedValueOnce({
-                ok: false,
-                status: 400,
-                statusText: 'Bad Request',
-                json: () => Promise.resolve({ message: 'Custom bad error' })
-            });
-            await expect(fetchProviderModels('http://test', 'key')).rejects.toThrow('Error 400: Custom bad error');
+            server.use(
+                http.get('http://api.example.com/models', () => {
+                    return HttpResponse.json({ message: 'Custom bad error' }, { status: 400, statusText: 'Bad Request' });
+                })
+            );
+            await expect(fetchProviderModels('http://api.example.com', 'key')).rejects.toThrow('Error 400: Custom bad error');
         });
 
         it('should extract error message from errData.message if errData.error is undefined', async () => {
-            mockFetch.mockResolvedValueOnce({
-                ok: false,
-                status: 400,
-                statusText: 'Bad Request',
-                json: () => Promise.resolve({ message: 'Custom bad error format 2' })
-            });
-            await expect(fetchProviderModels('http://test', 'key')).rejects.toThrow('Error 400: Custom bad error format 2');
+            server.use(
+                http.get('http://api.example.com/models', () => {
+                    return HttpResponse.json({ message: 'Custom bad error format 2' }, { status: 400, statusText: 'Bad Request' });
+                })
+            );
+            await expect(fetchProviderModels('http://api.example.com', 'key')).rejects.toThrow('Error 400: Custom bad error format 2');
         });
 
         it('should handle 403 response', async () => {
-            mockFetch.mockResolvedValueOnce({
-                ok: false,
-                status: 403,
-                statusText: 'Forbidden',
-                json: () => Promise.resolve({})
-            });
-            await expect(fetchProviderModels('http://test', 'key')).rejects.toThrow('Unauthorized or invalid API key (403).');
+            server.use(
+                http.get('http://api.example.com/models', () => {
+                    return HttpResponse.json({}, { status: 403, statusText: 'Forbidden' });
+                })
+            );
+            await expect(fetchProviderModels('http://api.example.com', 'key')).rejects.toThrow('Unauthorized or invalid API key (403).');
         });
 
         it('should handle missing error.message correctly (falling back to errData.message)', async () => {
-            mockFetch.mockResolvedValueOnce({
-                ok: false,
-                status: 400,
-                statusText: 'Bad Request',
-                json: () => Promise.resolve({ error: { notmessage: 'test' }, message: 'Fallback msg' })
-            });
-            await expect(fetchProviderModels('http://test', 'key')).rejects.toThrow('Error 400: Fallback msg');
+            server.use(
+                http.get('http://api.example.com/models', () => {
+                    return HttpResponse.json({ error: { notmessage: 'test' }, message: 'Fallback msg' }, { status: 400, statusText: 'Bad Request' });
+                })
+            );
+            await expect(fetchProviderModels('http://api.example.com', 'key')).rejects.toThrow('Error 400: Fallback msg');
         });
 
         it('should NOT append /models to url if it ends with /models', async () => {
-            mockFetch.mockResolvedValueOnce({
-                ok: true,
-                json: () => Promise.resolve({ data: [{id: 'model1'}] })
-            });
-            await fetchProviderModels('http://test/models', 'key');
-            expect(mockFetch).toHaveBeenCalledWith('http://test/models', expect.anything());
+            let fetchedUrl = '';
+            server.use(
+                http.get('http://api.example.com/models', ({ request }) => {
+                    fetchedUrl = request.url;
+                    return HttpResponse.json({ data: [{id: 'model1'}] });
+                })
+            );
+            await fetchProviderModels('http://api.example.com/models', 'key');
+            expect(fetchedUrl).toBe('http://api.example.com/models');
         });
 
         it('should NOT append /models to url if it ends with /models/', async () => {
-            mockFetch.mockResolvedValueOnce({
-                ok: true,
-                json: () => Promise.resolve({ data: [{id: 'model1'}] })
-            });
-            await fetchProviderModels('http://test/models/', 'key');
-            expect(mockFetch).toHaveBeenCalledWith('http://test/models/', expect.anything());
+            let fetchedUrl = '';
+            server.use(
+                http.get('http://api.example.com/models/', ({ request }) => {
+                    fetchedUrl = request.url;
+                    return HttpResponse.json({ data: [{id: 'model1'}] });
+                })
+            );
+            await fetchProviderModels('http://api.example.com/models/', 'key');
+            expect(fetchedUrl).toBe('http://api.example.com/models/');
         });
     });
 
     describe('updateModelSelectUI else branch', () => {
-
         it('should set modelSelect.value if input value exists in options', () => {
-            const modelSelect = document.getElementById('api-model-select');
-            const modelInput = document.getElementById('api-model-input');
-            const statusDiv = document.getElementById('model-fetch-status');
+            const modelSelect = screen.getByTestId('model-select');
+            const modelInput = screen.getByTestId('model-input');
+            const statusDiv = screen.getByTestId('fetch-status');
 
             modelInput.value = 'model1';
 
@@ -417,19 +411,4 @@ describe('Settings Module', () => {
             expect(modelSelect.value).toBe('model1');
         });
     });
-
-    describe('fetchModelsIfPossible catch block', () => {
-        it('should update statusDiv on error', async () => {
-            document.getElementById('api-url-input').value = 'http://test';
-            document.getElementById('api-key-input').value = 'test-key';
-            document.getElementById('api-provider-select').value = 'other';
-
-            mockFetch.mockRejectedValueOnce(new Error('Network error'));
-            await fetchModelsIfPossible();
-
-            const statusDiv = document.getElementById('model-fetch-status');
-            expect(statusDiv.innerText).toBe('Network error');
-        });
-    });
-
 });

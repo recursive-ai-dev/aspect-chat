@@ -69,6 +69,11 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mj
             });
         }
 
+        export function resetCacheForTesting() {
+            isCacheInitialized = false;
+            knowledgeCache = {};
+        }
+
         export async function saveKnowledgeFile(aspectId, name, text) {
             await initCache();
             const db = await dbPromise;
