@@ -26,7 +26,13 @@ vi.mock('../src/js/modules/state.js', async (importOriginal) => {
 });
 
 vi.mock('../src/js/modules/systemTools.js', () => ({
-    systemTools: [ { name: 'Calculator.js', code: 'test' } ]
+    systemTools: [
+        { name: 'Calculator.js', code: 'test' },
+        { name: 'ReadMemory.js', code: 'test' },
+        { name: 'WriteMemory.js', code: 'test' },
+        { name: 'Weather.js', code: 'test' },
+        { name: 'DateTime.js', code: 'test' }
+    ]
 }));
 
 describe('Aspects Management', () => {
@@ -145,11 +151,93 @@ describe('Aspects Management', () => {
             aspects.acceptCreateAspectFromTemplate('data-analyst');
             
             // wait for dynamic import to resolve
-            await new Promise(resolve => setTimeout(resolve, 0));
+            await new Promise(resolve => setTimeout(resolve, 10));
 
             expect(state.aspects.length).toBe(1);
             expect(state.aspects[0].name).toBe('The Data Analyst');
             expect(document.getElementById('create-aspect-modal')).toHaveClass('hidden');
+        });
+
+        it('should create web-researcher aspect with custom tools, custom icon, and chat history', async () => {
+            aspects.acceptCreateAspectFromTemplate('web-researcher');
+            
+            // wait for dynamic import to resolve
+            await new Promise(resolve => setTimeout(resolve, 10));
+
+            expect(state.aspects.length).toBe(1);
+            const created = state.aspects[0];
+            expect(created.name).toBe('Web Researcher & Summary Agent');
+            // Check custom tools + system tools matched
+            const toolNames = created.tools.map(t => t.name);
+            expect(toolNames).toContain('FetchWebsite.js');
+            expect(toolNames).toContain('ReadMemory.js');
+            expect(toolNames).toContain('WriteMemory.js');
+            // Check custom icon
+            expect(created.icon).toContain('data:image/svg+xml;base64,');
+            // Check custom chat history
+            expect(created.chatHistory.length).toBe(1);
+            expect(created.chatHistory[0].content).toContain('Web Researcher');
+        });
+
+        it('should create tinker-expert aspect with custom tools, custom icon, and chat history', async () => {
+            aspects.acceptCreateAspectFromTemplate('tinker-expert');
+            
+            // wait for dynamic import to resolve
+            await new Promise(resolve => setTimeout(resolve, 10));
+
+            expect(state.aspects.length).toBe(1);
+            const created = state.aspects[0];
+            expect(created.name).toBe('The Tinker & Code Sandbox Expert');
+            // Check custom tools + system tools matched
+            const toolNames = created.tools.map(t => t.name);
+            expect(toolNames).toContain('JSExecutor.js');
+            expect(toolNames).toContain('Calculator.js');
+            // Check custom icon
+            expect(created.icon).toContain('data:image/svg+xml;base64,');
+            // Check custom chat history
+            expect(created.chatHistory.length).toBe(1);
+            expect(created.chatHistory[0].content).toContain('Tinker & Code Sandbox Expert');
+        });
+
+        it('should create travel-planner aspect with custom tools, custom icon, and chat history', async () => {
+            aspects.acceptCreateAspectFromTemplate('travel-planner');
+            
+            // wait for dynamic import to resolve
+            await new Promise(resolve => setTimeout(resolve, 10));
+
+            expect(state.aspects.length).toBe(1);
+            const created = state.aspects[0];
+            expect(created.name).toBe('The Serene Travel Planner');
+            // Check custom tools + system tools matched
+            const toolNames = created.tools.map(t => t.name);
+            expect(toolNames).toContain('ItineraryBuilder.js');
+            expect(toolNames).toContain('Weather.js');
+            expect(toolNames).toContain('DateTime.js');
+            // Check custom icon
+            expect(created.icon).toContain('data:image/svg+xml;base64,');
+            // Check custom chat history
+            expect(created.chatHistory.length).toBe(1);
+            expect(created.chatHistory[0].content).toContain('Serene Travel Planner');
+        });
+
+        it('should create zen-coach aspect with custom tools, custom icon, and chat history', async () => {
+            aspects.acceptCreateAspectFromTemplate('zen-coach');
+            
+            // wait for dynamic import to resolve
+            await new Promise(resolve => setTimeout(resolve, 10));
+
+            expect(state.aspects.length).toBe(1);
+            const created = state.aspects[0];
+            expect(created.name).toBe('The Zen Productivity Coach');
+            // Check custom tools + system tools matched
+            const toolNames = created.tools.map(t => t.name);
+            expect(toolNames).toContain('ManageTasks.js');
+            expect(toolNames).toContain('DateTime.js');
+            // Check custom icon
+            expect(created.icon).toContain('data:image/svg+xml;base64,');
+            // Check custom chat history
+            expect(created.chatHistory.length).toBe(1);
+            expect(created.chatHistory[0].content).toContain('Zen Productivity Coach');
         });
 
         it('should upload icon correctly', () => {

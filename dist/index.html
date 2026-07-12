@@ -8,41 +8,12 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Balsamiq+Sans:wght@400;700&family=Patrick+Hand&display=swap" rel="stylesheet">
-  <script type="module" crossorigin src="./assets/index-COhB97Xb.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/index-DROK-mEa.css">
+  <script type="module" crossorigin src="./assets/index-DA4ANy9m.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-C5aJa4tH.css">
 </head>
 <body>
 
-    <!-- WELCOME MODAL -->
-    <div id="welcome-modal">
-        <div class="modal-content">
-            <button class="close-modal-btn" onclick="closeWelcomeModal()">✕</button>
-            <div class="modal-page active" id="page-1">
-                <h2>Welcome to Aspect Studio! 🌸</h2>
-                <p>Aspects are custom AI personas. You can define their name, personality, knowledge bank, and even load custom JavaScript tools they can run autonomously during chat!</p>
-                <div class="modal-nav-btns">
-                    <button class="save-btn" onclick="nextPage(2)">Next Tour ➔</button>
-                </div>
-            </div>
-            <div class="modal-page" id="page-2">
-                <h2>How to Set Up ⚙️</h2>
-                <p>1. <b>API Settings:</b> Click the Gear icon in the sidebar to enter your model's endpoint, model name, and API Key.<br>
-                   2. <b>Create Aspect:</b> Click "+ New Aspect" to start sketching out a persona.<br>
-                   3. <b>Customize:</b> Add custom instructions (system prompt), knowledge articles, and custom script tools.</p>
-                <div class="modal-nav-btns">
-                    <button class="settings-btn" onclick="nextPage(1)">Back</button>
-                    <button class="save-btn" onclick="nextPage(3)">Next ➔</button>
-                </div>
-            </div>
-            <div class="modal-page" id="page-3">
-                <h2>Persistence & Saving 💾</h2>
-                <p>This is a local browser app. All changes are saved temporarily in your local storage, but to keep your Aspects permanent, <strong>click the Download button</strong> to export your setup as a <code>.aspect</code> file! You can upload it later using "Upload .aspect".</p>
-                <div class="modal-nav-btns">
-                    <button class="settings-btn" onclick="nextPage(2)">Back</button>
-                    <button class="save-btn" onclick="closeWelcomeModal()">Get Started! 🌲</button>
-                </div>
-            </div>
-        </div>
+
     </div>
 
     <!-- SETTINGS MODAL -->
@@ -146,24 +117,20 @@
     </div>
 
     <div id="create-aspect-modal" class="hidden" style="position: fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); display:flex; justify-content:center; align-items:center; z-index: 50; backdrop-filter: blur(4px);">
-        <div class="modal-content" style="max-width: 440px; text-align: left; padding-top: 30px;">
+        <div class="modal-content" style="max-width: 600px; text-align: left; padding-top: 30px; max-height: 90vh; overflow-y: auto;">
             <button class="close-modal-btn" onclick="cancelCreateAspect()">✕</button>
             <h2 style="font-family: 'Patrick Hand', cursive; font-size: 2.2rem; text-align: center; color: var(--accent-secondary-dark);">Create New Aspect</h2>
-            <div class="settings-form">
-                <label>Aspect Name</label>
-                <input type="text" id="create-aspect-name-input" placeholder="New Aspect">
-                
-                <label>User-Facing Description</label>
-                <input type="text" id="create-aspect-desc-input" placeholder="A brand new persona.">
-                
-                <label>Aspect Icon (Optional)</label>
-                <div class="icon-preview-container">
-                    <img id="create-aspect-icon-preview" src="" alt="Icon" style="width:64px;height:64px;border-radius:12px;object-fit:cover;border:3px solid var(--border-color);">
-                    <div>
-                        <input type="file" id="create-aspect-icon-input" accept="image/*" class="hidden" onchange="uploadCreateIcon(event)">
-                        <button class="settings-btn" onclick="document.getElementById('create-aspect-icon-input').click()" style="margin-bottom: 5px; font-size: 0.9rem; padding: 6px 12px; width: auto; display: inline-block;">📂 Upload Icon</button>
-                        <div class="file-list" id="create-aspect-icon-filename">No icon uploaded</div>
-                    </div>
+            <p style="text-align: center; margin-bottom: 20px;">Choose a template to get started instantly.</p>
+
+            <div id="template-gallery" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
+                <!-- Templates injected via JS -->
+            </div>
+
+            <div style="text-align: center;">
+                <button class="settings-btn danger-btn" style="width: auto; padding: 10px 20px;" onclick="cancelCreateAspect()">Cancel</button>
+            </div>
+        </div>
+    </div>
                 </div>
             </div>
             <div class="modal-nav-btns" style="margin-top: 25px;">
@@ -271,20 +238,42 @@
                 </div>
 
                 <div>
-                    <div class="editor-field">
-                        <label>System Instructions (Persona Prompt)</label>
-                        <textarea id="edit-instructions" style="min-height: 120px;" oninput="updateAspectData('instructions', this.value)" placeholder="The system instructions given to the AI before every response..."></textarea>
+                    <div style="margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; background: var(--bg-input); padding: 10px; border-radius: 12px; border: 2px solid var(--border-color);">
+                        <span style="font-weight: bold;">Advanced Configuration</span>
+                        <label class="switch" style="position: relative; display: inline-block; width: 50px; height: 28px;">
+                            <input type="checkbox" id="advanced-mode-toggle" style="opacity: 0; width: 0; height: 0;" onchange="toggleAdvancedMode()">
+                            <span style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--border-color); transition: .4s; border-radius: 34px;"></span>
+                            <span id="advanced-mode-slider" style="position: absolute; content: ''; height: 20px; width: 20px; left: 4px; bottom: 4px; background-color: white; transition: .4s; border-radius: 50%;"></span>
+                        </label>
                     </div>
 
-                    <div class="editor-field">
-                        <label>Knowledge Bank (Markdown)</label>
-                        <textarea id="edit-knowledge" style="min-height: 120px;" oninput="updateAspectData('knowledge', this.value)" placeholder="Reference material the AI can consult..."></textarea>
-                        <div style="margin-top: 10px; text-align: center;">
-                            <button class="settings-btn" onclick="document.getElementById('upload-knowledge-input').click()" style="margin: 0 auto; display: inline-block; width: auto; font-size: 0.9rem; padding: 5px 10px;">📂 Upload Files (.txt, .md, .pdf, .docx)</button>
-                            <input type="file" id="upload-knowledge-input" accept=".txt,.md,.pdf,.docx" multiple class="hidden" onchange="uploadKnowledgeFiles(event)">
+                    <div id="basic-config-area">
+                        <div class="editor-field">
+                            <label>What should this Aspect do?</label>
+                            <textarea id="edit-basic-instructions" style="min-height: 120px;" oninput="updateBasicInstructions()" placeholder="Describe what you want this AI to do... e.g. 'Act as a friendly coding mentor who explains concepts simply.'"></textarea>
+                        </div>
+                        <div class="editor-field">
+                            <label>Tone: <span id="tone-label">Balanced</span></label>
+                            <input type="range" id="edit-basic-tone" min="1" max="5" value="3" oninput="updateBasicInstructions()" style="width: 100%; margin-top: 10px; accent-color: var(--accent-primary);">
+                            <div style="display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--text-light); margin-top: 5px;">
+                                <span>Casual</span>
+                                <span>Formal</span>
+                            </div>
                         </div>
                     </div>
 
+                    <div id="advanced-config-area" class="hidden">
+                        <div class="editor-field">
+                            <label>System Instructions (Persona Prompt)</label>
+                            <textarea id="edit-instructions" style="min-height: 120px;" oninput="updateAspectData('instructions', this.value)" placeholder="The system instructions given to the AI before every response..."></textarea>
+                        </div>
+
+                        <div class="editor-field">
+                            <label>Knowledge Bank (Markdown)</label>
+                            <textarea id="edit-knowledge" style="min-height: 120px;" oninput="updateAspectData('knowledge', this.value)" placeholder="Reference material the AI can consult..."></textarea>
+                            <div style="margin-top: 10px; text-align: center;">
+                                <button class="settings-btn" onclick="document.getElementById('upload-knowledge-input').click()" style="margin: 0 auto; display: inline-block; width: auto; font-size: 0.9rem; padding: 5px 10px;">📂 Upload Files (.txt, .md, .pdf, .docx)</button>
+                                <input type="file" id="upload-knowledge-input" accept=".txt,.md,.pdf,.docx" multiple class="hidden" onchange="uploadKnowledgeFiles(event)">
                     <div class="editor-field">
                         <label>Injectable JS Tools</label>
                         <div style="border: 2px dashed var(--border-color); padding: 15px; border-radius: 12px; text-align: center; background: var(--bg-input);">
@@ -295,9 +284,21 @@
                                 <button class="settings-btn" onclick="document.getElementById('upload-tools-input').click()">📂 Upload .js</button>
                             <button class="settings-btn" onclick="openWorkflowModal()">✨ Visual Builder</button>
                             </div>
-                            <input type="file" id="upload-tools-input" accept=".js" multiple class="hidden" onchange="uploadTools(event)">
-                            <div class="file-list" id="tools-list" style="margin-top: 15px; text-align: left;">
-                                <span style="font-weight: bold; color: var(--accent-primary); display: block; text-align: center;">No tools added</span>
+                        </div>
+
+                        <div class="editor-field">
+                            <label>Injectable JS Tools</label>
+                            <div style="border: 2px dashed var(--border-color); padding: 15px; border-radius: 12px; text-align: center; background: var(--bg-input);">
+                                <p style="font-size: 0.9rem; margin-bottom: 10px; color: var(--text-light);">Define tools for your Aspect to run autonomously.</p>
+                                <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
+                                    <button class="settings-btn" onclick="openSystemToolsModal()">➕ Add System Tool</button>
+                                    <button class="settings-btn" onclick="openToolEditor()">✏️ New Tool</button>
+                                    <button class="settings-btn" onclick="document.getElementById('upload-tools-input').click()">📂 Upload .js</button>
+                                </div>
+                                <input type="file" id="upload-tools-input" accept=".js" multiple class="hidden" onchange="uploadTools(event)">
+                                <div class="file-list" id="tools-list" style="margin-top: 15px; text-align: left;">
+                                    <span style="font-weight: bold; color: var(--accent-primary); display: block; text-align: center;">No tools added</span>
+                                </div>
                             </div>
                         </div>
                     </div>
