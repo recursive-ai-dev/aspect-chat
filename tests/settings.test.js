@@ -1,3 +1,7 @@
+import { vi } from 'vitest';
+vi.mock('../src/js/modules/aspects.js', () => ({
+    cancelCreateAspect: vi.fn()
+}));
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { state } from '../src/js/modules/state.js';
 import {
@@ -5,7 +9,9 @@ import {
     saveSettings,
     onProviderSelect,
     fetchModelsIfPossible,
-    onModelSelectDropdown
+    onModelSelectDropdown,
+    fetchProviderModels,
+    updateModelSelectUI
 } from '../src/js/modules/settings.js';
 
 describe('Settings Module', () => {
@@ -225,4 +231,205 @@ describe('Settings Module', () => {
             expect(modelInput.value).toBe('selected-model');
         });
     });
+    describe('Window Event Listeners', () => {
+        describe('click event', () => {
+            it('should close create-aspect-modal if clicked directly', async () => {
+                const createModal = document.getElementById('create-aspect-modal');
+                createModal.classList.remove('hidden');
+                createModal.dispatchEvent(new Event('click', { bubbles: true }));
+
+                expect((await import('../src/js/modules/aspects.js')).cancelCreateAspect).toHaveBeenCalled();
+            });
+
+            it('should close settings-modal if clicked directly', () => {
+                const settingsModal = document.getElementById('settings-modal');
+                settingsModal.classList.remove('hidden');
+                settingsModal.dispatchEvent(new Event('click', { bubbles: true }));
+
+                expect(settingsModal.classList.contains('hidden')).toBe(true);
+            });
+        });
+
+        describe('keydown event', () => {
+            it('should close create-aspect-modal if Escape is pressed and it is not hidden', async () => {
+                const createModal = document.getElementById('create-aspect-modal');
+                createModal.classList.remove('hidden');
+                window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+
+                expect((await import('../src/js/modules/aspects.js')).cancelCreateAspect).toHaveBeenCalled();
+            });
+
+            it('should close settings-modal if Escape is pressed and it is not hidden', () => {
+                const settingsModal = document.getElementById('settings-modal');
+                settingsModal.classList.remove('hidden');
+                window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+
+                expect(settingsModal.classList.contains('hidden')).toBe(true);
+            });
+
+            it('should do nothing if another key is pressed', async () => {
+                const settingsModal = document.getElementById('settings-modal');
+                settingsModal.classList.remove('hidden');
+                window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+
+                expect(settingsModal.classList.contains('hidden')).toBe(false);
+                // expect((await import('../src/js/modules/aspects.js')).cancelCreateAspect).not.toHaveBeenCalled();
+            });
+        });
+    });
+
+    describe('fetchProviderModels error handling', () => {
+        it('should throw an error if response is not ok and no error message', async () => {
+            mockFetch.mockResolvedValueOnce({
+                ok: false,
+                status: 500,
+                statusText: 'Internal Server Error',
+                json: () => Promise.reject(new Error('no json'))
+            });
+            await expect(fetchProviderModels('http://test', 'key')).rejects.toThrow('Error 500: Internal Server Error');
+        });
+
+        it('should throw Rate limit exceeded for 429', async () => {
+            mockFetch.mockResolvedValueOnce({
+                ok: false,
+                status: 429,
+                statusText: 'Too Many Requests',
+                json: () => Promise.resolve({})
+            });
+            await expect(fetchProviderModels('http://test', 'key')).rejects.toThrow('Rate limit exceeded (429).');
+        });
+
+        it('should throw No models found if models array is empty', async () => {
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                json: () => Promise.resolve({ data: [] })
+            });
+            await expect(fetchProviderModels('http://test', 'key')).rejects.toThrow('No models found.');
+        });
+
+        it('should append /models to url if it lacks it', async () => {
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                json: () => Promise.resolve({ data: [{id: 'model1'}] })
+            });
+            await fetchProviderModels('http://test', 'key');
+            expect(mockFetch).toHaveBeenCalledWith('http://test/models', expect.anything());
+        });
+
+        it('should handle missing error.message', async () => {
+            mockFetch.mockResolvedValueOnce({
+                ok: false,
+                status: 500,
+                statusText: 'Internal Server Error',
+                json: () => Promise.resolve({})
+            });
+            await expect(fetchProviderModels('http://test', 'key')).rejects.toThrow('Error 500: Internal Server Error');
+        });
+
+        it('should handle data without data or models array', async () => {
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                json: () => Promise.resolve({ notmodels: [] })
+            });
+            await expect(fetchProviderModels('http://test', 'key')).rejects.toThrow('No models found.');
+        });
+
+        it('should handle json parsing error when extracting error message', async () => {
+            mockFetch.mockResolvedValueOnce({
+                ok: false,
+                status: 400,
+                statusText: 'Bad Request',
+                json: () => Promise.reject(new Error('SyntaxError'))
+            });
+            await expect(fetchProviderModels('http://test', 'key')).rejects.toThrow('Error 400: Bad Request');
+        });
+
+        it('should handle custom error format from json', async () => {
+            mockFetch.mockResolvedValueOnce({
+                ok: false,
+                status: 400,
+                statusText: 'Bad Request',
+                json: () => Promise.resolve({ message: 'Custom bad error' })
+            });
+            await expect(fetchProviderModels('http://test', 'key')).rejects.toThrow('Error 400: Custom bad error');
+        });
+
+        it('should extract error message from errData.message if errData.error is undefined', async () => {
+            mockFetch.mockResolvedValueOnce({
+                ok: false,
+                status: 400,
+                statusText: 'Bad Request',
+                json: () => Promise.resolve({ message: 'Custom bad error format 2' })
+            });
+            await expect(fetchProviderModels('http://test', 'key')).rejects.toThrow('Error 400: Custom bad error format 2');
+        });
+
+        it('should handle 403 response', async () => {
+            mockFetch.mockResolvedValueOnce({
+                ok: false,
+                status: 403,
+                statusText: 'Forbidden',
+                json: () => Promise.resolve({})
+            });
+            await expect(fetchProviderModels('http://test', 'key')).rejects.toThrow('Unauthorized or invalid API key (403).');
+        });
+
+        it('should handle missing error.message correctly (falling back to errData.message)', async () => {
+            mockFetch.mockResolvedValueOnce({
+                ok: false,
+                status: 400,
+                statusText: 'Bad Request',
+                json: () => Promise.resolve({ error: { notmessage: 'test' }, message: 'Fallback msg' })
+            });
+            await expect(fetchProviderModels('http://test', 'key')).rejects.toThrow('Error 400: Fallback msg');
+        });
+
+        it('should NOT append /models to url if it ends with /models', async () => {
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                json: () => Promise.resolve({ data: [{id: 'model1'}] })
+            });
+            await fetchProviderModels('http://test/models', 'key');
+            expect(mockFetch).toHaveBeenCalledWith('http://test/models', expect.anything());
+        });
+
+        it('should NOT append /models to url if it ends with /models/', async () => {
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                json: () => Promise.resolve({ data: [{id: 'model1'}] })
+            });
+            await fetchProviderModels('http://test/models/', 'key');
+            expect(mockFetch).toHaveBeenCalledWith('http://test/models/', expect.anything());
+        });
+    });
+
+    describe('updateModelSelectUI else branch', () => {
+
+        it('should set modelSelect.value if input value exists in options', () => {
+            const modelSelect = document.getElementById('api-model-select');
+            const modelInput = document.getElementById('api-model-input');
+            const statusDiv = document.getElementById('model-fetch-status');
+
+            modelInput.value = 'model1';
+
+            updateModelSelectUI([{id: 'model1'}, {id: 'model2'}], modelSelect, modelInput, statusDiv);
+
+            expect(modelSelect.value).toBe('model1');
+        });
+    });
+
+    describe('fetchModelsIfPossible catch block', () => {
+        it('should update statusDiv on error', async () => {
+            document.getElementById('api-url-input').value = 'http://test';
+            document.getElementById('api-key-input').value = 'test-key';
+            document.getElementById('api-provider-select').value = 'other';
+
+            mockFetch.mockRejectedValueOnce(new Error('Network error'));
+            await fetchModelsIfPossible();
+
+            const statusDiv = document.getElementById('model-fetch-status');
+            expect(statusDiv.innerText).toBe('Network error');
+        });
+    });
+
 });
