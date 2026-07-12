@@ -358,3 +358,18 @@ import { state } from './state.js';
             document.getElementById('edit-instructions').value = newInstructions;
             updateAspectData('instructions', newInstructions);
         }
+
+export function setChatLoadingState(isLoading) {
+    if (isLoading) {
+        document.getElementById('send-btn').disabled = true;
+        document.getElementById('send-btn').classList.add('hidden');
+        document.getElementById('stop-btn').classList.remove('hidden');
+        document.getElementById('chat-input').disabled = true;
+    } else {
+        document.getElementById('send-btn').disabled = false;
+        document.getElementById('send-btn').classList.remove('hidden');
+        document.getElementById('stop-btn').classList.add('hidden');
+        document.getElementById('chat-input').disabled = false;
+        document.getElementById('chat-input').focus();
+    }
+}
