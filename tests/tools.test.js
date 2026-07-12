@@ -50,6 +50,17 @@ describe('executeJavaScriptTool', () => {
         delete global.Blob;
     });
 
+
+    it('should return a JSON error string if the tool is not found', async () => {
+        vi.spyOn(aspectsModule, 'getCurrentAspect').mockReturnValue({
+            id: 'aspect-2',
+            tools: [],
+            memory: {}
+        });
+
+        const result = await executeJavaScriptTool('nonExistentTool', '{}');
+        expect(result).toBe(JSON.stringify({ error: 'Tool "nonExistentTool" not found.' }));
+    });
     it('should fallback to using the string directly if JSON.parse fails on argStr', async () => {
         vi.spyOn(aspectsModule, 'getCurrentAspect').mockReturnValue({
             id: 'aspect-1',

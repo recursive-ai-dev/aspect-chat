@@ -5,7 +5,8 @@ import { loadDefaultAspects } from '../src/js/modules/aspects.js';
 import * as ui from '../src/js/modules/ui.js';
 import * as aspects from '../src/js/modules/aspects.js';
 
-// Mock ui and state functions
+
+// Mock ui and state functions before importing aspects.js
 vi.mock('../src/js/modules/ui.js', () => ({
     applyAspectBackground: vi.fn(),
     showChatView: vi.fn(),
@@ -20,6 +21,12 @@ vi.mock('../src/js/modules/state.js', async (importOriginal) => {
         saveAspectsToLocalStorage: vi.fn(),
     };
 });
+
+describe('Aspects Management', () => {
+import { state } from '../src/js/modules/state.js';
+import { loadDefaultAspects } from '../src/js/modules/aspects.js';
+import * as ui from '../src/js/modules/ui.js';
+import * as aspects from '../src/js/modules/aspects.js';
 
 describe('Aspects Module', () => {
     beforeEach(() => {
@@ -169,4 +176,5 @@ describe('Aspects Module', () => {
             expect(addBtn.innerText).toBe('+ New Aspect');
         });
     });
+});
 });
