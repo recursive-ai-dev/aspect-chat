@@ -185,6 +185,13 @@ import { state } from './state.js';
                         markChangesUnsaved();
                     }
                 };
+                reader.onerror = () => {
+                    loadedCount++;
+                    if (loadedCount === files.length) {
+                        showEditorView();
+                        markChangesUnsaved();
+                    }
+                };
                 reader.readAsText(file);
             });
         }

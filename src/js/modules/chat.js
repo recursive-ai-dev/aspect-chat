@@ -59,8 +59,18 @@ export function escapeHtml(str) {
                     } else {
                         const bubble = document.createElement('div');
                         bubble.className = `message-bubble ${msg.role}`;
-                        // Escape user input, render and sanitize assistant output
-                        bubble.innerHTML = msg.role === 'user' ? escapeHtml(content) : DOMPurify.sanitize(marked.parse(content));
+                        // Escape user input, render and sanitize assistant output (memoized per content)
+                        let bubbleHtml;
+                        if (typeof msg === 'object' && msg !== null) {
+                            if (msg._renderedHtml === undefined || msg._renderedContent !== content) {
+                                msg._renderedHtml = msg.role === 'user' ? escapeHtml(content) : DOMPurify.sanitize(marked.parse(content));
+                                msg._renderedContent = content;
+                            }
+                            bubbleHtml = msg._renderedHtml;
+                        } else {
+                            bubbleHtml = msg.role === 'user' ? escapeHtml(content) : DOMPurify.sanitize(marked.parse(content));
+                        }
+                        bubble.innerHTML = bubbleHtml;
                         
                         const actions = document.createElement('div');
                         actions.className = 'message-actions';

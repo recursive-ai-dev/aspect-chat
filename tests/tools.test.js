@@ -94,6 +94,50 @@ describe('Tools Module', () => {
             const aspect = { id: '1', instructions: 'Be helpful' };
             await expect(tools.fetchAIResponseForAspect(aspect, 'Hello')).rejects.toThrow('API error 401: Invalid token');
         });
+
+        it('should throw on empty choices array', async () => {
+            server.use(
+                http.post('https://api.test.com/v1/chat/completions', () => {
+                    return HttpResponse.json({ choices: [] });
+                })
+            );
+            const aspect = { id: '1', instructions: 'Be helpful', knowledge: '' };
+            await expect(tools.fetchAIResponseForAspect(aspect, 'Hello')).rejects.toThrow('Empty response from model');
+        });
+    });
+
+    describe('executeJavaScriptTool worker source', () => {
+        it('should build valid worker source even when tool code contains backticks', async () => {
+            const aspect = {
+                id: 'current',
+                chatHistory: [],
+                tools: [{ name: 't', code: 'async function executeTool(args, state) { const msg = `hi ${args.x}`; return msg; }' }]
+            };
+            state.currentAspectId = 'current';
+            aspectsModule.getCurrentAspect.mockReturnValue(aspect);
+
+            const RealBlob = global.Blob;
+            let capturedCode = null;
+            global.Blob = class { constructor(parts) { capturedCode = parts.join(''); } };
+            global.URL.createObjectURL = vi.fn().mockReturnValue('mock-url');
+            global.URL.revokeObjectURL = vi.fn();
+            global.Worker = class Worker {
+                constructor() {}
+                postMessage() { this.onmessage({ data: { success: true, result: 'ok', state: {} } }); }
+                terminate() {}
+            };
+
+            const result = await tools.executeJavaScriptTool('t', '{"x":"there"}');
+
+            global.Blob = RealBlob;
+            delete global.URL.createObjectURL;
+            delete global.URL.revokeObjectURL;
+            delete global.Worker;
+
+            expect(result).toContain('ok');
+            expect(capturedCode).toContain('`hi ${args.x}`');
+            expect(() => new Function(capturedCode)).not.toThrow();
+        });
     });
 
     describe('insertToolTag', () => {
@@ -329,6 +373,32 @@ describe('Tools Module', () => {
             });
             await tools.sendAIRequest();
             expect(aspect.chatHistory[aspect.chatHistory.length - 1].content).toContain('Hello');
+        });
+
+        it('should include a final SSE line that lacks a trailing newline', async () => {
+            const aspect = { chatHistory: [] };
+            aspectsModule.getCurrentAspect.mockReturnValue(aspect);
+            state.settings = { apiUrl: 'https://api.test.com', apiKey: 'test' };
+            global.fetch = vi.fn().mockResolvedValue({
+                ok: true,
+                body: {
+                    getReader: () => {
+                        let calls = 0;
+                        return {
+                            read: () => {
+                                calls++;
+                                if (calls === 1) {
+                                    return Promise.resolve({ done: false, value: new TextEncoder().encode('data: {"choices": [{"delta": {"content": "Hel"}}]}\ndata: {"choices": [{"delta": {"content": "lo"}}]}') });
+                                }
+                                return Promise.resolve({ done: true });
+                            },
+                            releaseLock: vi.fn()
+                        };
+                    }
+                }
+            });
+            await tools.sendAIRequest();
+            expect(aspect.chatHistory[aspect.chatHistory.length - 1].content).toBe('Hello');
         });
     });
     

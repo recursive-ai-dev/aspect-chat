@@ -486,6 +486,7 @@ Keep your responses friendly, concise, and helpful.`,
         }
         
         export function cancelCreateAspect() {
+            window.tempCreateIcon = null;
             document.getElementById('create-aspect-modal').classList.add('hidden');
         }
 

@@ -78,9 +78,28 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                     // Ignore partial JSON
                 }
             }
+            }
         }
-    }
-    return aiMessage;
+
+        // Flush any final SSE line that was not terminated by a newline
+        if (pendingData.trim() !== '') {
+            const line = pendingData;
+            if (line.startsWith('data: ')) {
+                const dataStr = line.slice(6);
+                if (dataStr !== '[DONE]') {
+                    try {
+                        const data = JSON.parse(dataStr);
+                        if (data.choices && data.choices[0].delta && data.choices[0].delta.content) {
+                            aiMessage += data.choices[0].delta.content;
+                            if (bubbleElement) updateStreamingBubble(bubbleElement, aiMessage);
+                        }
+                    } catch (e) {
+                        // Ignore partial JSON
+                    }
+                }
+            }
+        }
+        return aiMessage;
 }
 
 
@@ -121,8 +140,12 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                 throw new Error(`API error ${response.status}: ${errMsg}`);
             }
 
-            const data = await response.json();
-            return data.choices[0].message.content;
+            const data = await response.json().catch(() => ({}));
+            const content = data?.choices?.[0]?.message?.content;
+            if (content == null) {
+                throw new Error("Empty response from model.");
+            }
+            return content;
         }
 
         export async function executeJavaScriptTool(toolName, argStr) {
@@ -142,26 +165,25 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                 }
                 
                 // Construct safe asynchronous wrapper using Web Worker to sandbox execution
-                const workerCode = `
-                    self.onmessage = async function(e) {
-                        if (e.data.type === 'memoryWriteComplete') return; // Handled by tool listener
-                        if (e.data.type === 'summonComplete') return; // Handled by tool listener
-                        const { args, state, memory } = e.data;
-                        self.aspectMemory = memory;
-
-                        try {
-                            ${tool.code}
-                            if (typeof executeTool === 'function') {
-                                const result = await executeTool(args, state);
-                                self.postMessage({ success: true, result, state });
-                            } else {
-                                self.postMessage({ success: false, error: "Function executeTool(args, state) is not defined in this script. Ensure you have 'async function executeTool(args, state) { ... }' in your tool." });
-                            }
-                        } catch (err) {
-                            self.postMessage({ success: false, error: err.message });
-                        }
-                    };
-                `;
+                const workerCode = [
+                    "self.onmessage = async function(e) {",
+                    "    if (e.data.type === 'memoryWriteComplete') return; // Handled by tool listener",
+                    "    if (e.data.type === 'summonComplete') return; // Handled by tool listener",
+                    "    const { args, state, memory } = e.data;",
+                    "    self.aspectMemory = memory;",
+                    "    try {",
+                    tool.code,
+                    "        if (typeof executeTool === 'function') {",
+                    "            const result = await executeTool(args, state);",
+                    "            self.postMessage({ success: true, result, state });",
+                    "        } else {",
+                    "            self.postMessage({ success: false, error: \"Function executeTool(args, state) is not defined in this script. Ensure you have 'async function executeTool(args, state) { ... }' in your tool.\" });",
+                    "        }",
+                    "    } catch (err) {",
+                    "        self.postMessage({ success: false, error: err.message });",
+                    "    }",
+                    "};"
+                ].join('\n');
                 const blob = new Blob([workerCode], { type: 'application/javascript' });
                 const workerUrl = URL.createObjectURL(blob);
                 const worker = new Worker(workerUrl);
@@ -177,6 +199,9 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                                 aspect.memory[e.data.key] = e.data.value;
                                 await dbModule.saveMemory(aspect.id, aspect.memory);
                                 worker.postMessage({ type: 'memoryWriteComplete', messageId: e.data.messageId });
+                            }).catch((err) => {
+                                console.error("Failed to save aspect memory", err);
+                                worker.postMessage({ type: 'memoryWriteComplete', messageId: e.data.messageId, error: err.message });
                             });
                             return; // Keep worker alive for the final result
                         }
@@ -319,7 +344,7 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
         const toolCache = new Map();
 
         async function getCachedOrExecuteTool(toolName, toolArgs) {
-            const cacheKey = `${toolName}_${toolArgs}`;
+            const cacheKey = `${state.currentAspectId}:${toolName}:${toolArgs}`;
             if (toolCache.has(cacheKey)) {
                 addSystemLog(`⚡ **Cache Hit:** \`${toolName}\``);
                 return toolCache.get(cacheKey);
@@ -391,9 +416,10 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                 } catch (e) {
                     if (e.name === 'AbortError') {
                         addSystemLog(`⚠️ **Generation stopped by user.**`);
-                    } else {
-                        throw e;
+                        renderChatMessages();
+                        return;
                     }
+                    throw e;
                 }
 
                 await processAIResponseAndTools(aiMessage, aspect);
