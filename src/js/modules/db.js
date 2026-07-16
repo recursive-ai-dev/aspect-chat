@@ -48,50 +48,61 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mj
         // In-memory cache for performance
         let knowledgeCache = {}; // aspectId -> Array of file objects
         let isCacheInitialized = false;
+        let initCachePromise = null;
 
         async function initCache() {
             if (isCacheInitialized) return;
-            const db = await dbPromise;
-            return new Promise((resolve, reject) => {
-                const tx = db.transaction('files', 'readonly');
-                const store = tx.objectStore('files');
-                const request = store.getAll();
-                request.onsuccess = () => {
-                    knowledgeCache = {};
-                    request.result.forEach(f => {
-                        if (!knowledgeCache[f.aspectId]) knowledgeCache[f.aspectId] = [];
-                        knowledgeCache[f.aspectId].push(f);
-                    });
-                    isCacheInitialized = true;
-                    resolve();
-                };
-                request.onerror = (e) => reject(e.target.error);
-            });
+            if (initCachePromise) return initCachePromise;
+
+            initCachePromise = (async () => {
+                const db = await dbPromise;
+                return new Promise((resolve, reject) => {
+                    const tx = db.transaction('files', 'readonly');
+                    const store = tx.objectStore('files');
+                    const request = store.getAll();
+                    request.onsuccess = () => {
+                        knowledgeCache = {};
+                        request.result.forEach(f => {
+                            if (!knowledgeCache[f.aspectId]) knowledgeCache[f.aspectId] = [];
+                            knowledgeCache[f.aspectId].push(f);
+                        });
+                        isCacheInitialized = true;
+                        initCachePromise = null;
+                        resolve();
+                    };
+                    request.onerror = (e) => {
+                        initCachePromise = null;
+                        reject(e.target.error);
+                    };
+                });
+            })();
+            return initCachePromise;
         }
 
         export function resetCacheForTesting() {
             isCacheInitialized = false;
             knowledgeCache = {};
+            initCachePromise = null;
         }
 
         export async function saveKnowledgeFile(aspectId, name, text) {
             await initCache();
             const db = await dbPromise;
 
-            // Update cache immediately
-            if (!knowledgeCache[aspectId]) knowledgeCache[aspectId] = [];
-            const existingIdx = knowledgeCache[aspectId].findIndex(f => f.name === name);
-            if (existingIdx !== -1) {
-                knowledgeCache[aspectId][existingIdx].text = text;
-            } else {
-                knowledgeCache[aspectId].push({ aspectId, name, text });
-            }
-
-            // Sync with DB
+            // Sync with DB and update cache ONLY on success
             return new Promise((resolve, reject) => {
                 const tx = db.transaction('files', 'readwrite');
                 tx.objectStore('files').put({ aspectId, name, text });
-                tx.oncomplete = () => resolve();
+                tx.oncomplete = () => {
+                    if (!knowledgeCache[aspectId]) knowledgeCache[aspectId] = [];
+                    const existingIdx = knowledgeCache[aspectId].findIndex(f => f.name === name);
+                    if (existingIdx !== -1) {
+                        knowledgeCache[aspectId][existingIdx].text = text;
+                    } else {
+                        knowledgeCache[aspectId].push({ aspectId, name, text });
+                    }
+                    resolve();
+                };
                 tx.onerror = (e) => reject(e.target.error);
             });
         }

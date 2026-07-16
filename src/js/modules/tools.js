@@ -59,9 +59,10 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
         pendingData = lines.pop();
 
         for (let line of lines) {
-            if (line.trim() === '') continue;
-            if (line.startsWith('data: ')) {
-                const dataStr = line.slice(6);
+            const cleanLine = line.replace(/\r$/, '').trim();
+            if (cleanLine === '') continue;
+            if (cleanLine.startsWith('data:')) {
+                const dataStr = cleanLine.slice(5).trim();
                 if (dataStr === '[DONE]') continue;
                 try {
                     const data = JSON.parse(dataStr);
@@ -78,29 +79,30 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                     // Ignore partial JSON
                 }
             }
-            }
         }
+    }
 
-        // Flush any final SSE line that was not terminated by a newline
-        if (pendingData.trim() !== '') {
-            const line = pendingData;
-            if (line.startsWith('data: ')) {
-                const dataStr = line.slice(6);
-                if (dataStr !== '[DONE]') {
-                    try {
-                        const data = JSON.parse(dataStr);
-                        if (data.choices && data.choices[0].delta && data.choices[0].delta.content) {
-                            aiMessage += data.choices[0].delta.content;
-                            if (bubbleElement) updateStreamingBubble(bubbleElement, aiMessage);
-                        }
-                    } catch (e) {
-                        // Ignore partial JSON
+    // Flush any final SSE line that was not terminated by a newline
+    const finalLine = pendingData.replace(/\r$/, '').trim();
+    if (finalLine !== '') {
+        if (finalLine.startsWith('data:')) {
+            const dataStr = finalLine.slice(5).trim();
+            if (dataStr !== '[DONE]') {
+                try {
+                    const data = JSON.parse(dataStr);
+                    if (data.choices && data.choices[0].delta && data.choices[0].delta.content) {
+                        aiMessage += data.choices[0].delta.content;
+                        if (bubbleElement) updateStreamingBubble(bubbleElement, aiMessage);
                     }
+                } catch (e) {
+                    // Ignore partial JSON
                 }
             }
         }
-        return aiMessage;
+    }
+    return aiMessage;
 }
+
 
 
 
@@ -167,6 +169,7 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                 // Construct safe asynchronous wrapper using Web Worker to sandbox execution
                 const workerCode = [
                     "self.onmessage = async function(e) {",
+                    "    if (!e || !e.data) return;",
                     "    if (e.data.type === 'memoryWriteComplete') return; // Handled by tool listener",
                     "    if (e.data.type === 'summonComplete') return; // Handled by tool listener",
                     "    const { args, state, memory } = e.data;",
@@ -192,7 +195,37 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                 if (!tool.state) tool.state = {};
                 
                 const result = await new Promise((resolve, reject) => {
+                    let timeoutId;
+                    let onAbort;
+
+                    const cleanup = () => {
+                        if (timeoutId) clearTimeout(timeoutId);
+                        if (onAbort && state.abortController) {
+                            state.abortController.signal.removeEventListener('abort', onAbort);
+                        }
+                    };
+
+                    timeoutId = setTimeout(() => {
+                        worker.terminate();
+                        URL.revokeObjectURL(workerUrl);
+                        cleanup();
+                        reject(new Error("Tool execution timed out after 10 seconds."));
+                    }, 10000);
+
+                    onAbort = () => {
+                        worker.terminate();
+                        URL.revokeObjectURL(workerUrl);
+                        cleanup();
+                        reject(new Error("Tool execution aborted."));
+                    };
+
+                    if (state.abortController) {
+                        state.abortController.signal.addEventListener('abort', onAbort);
+                    }
+
                     worker.onmessage = async (e) => {
+                        if (!e || !e.data) return;
+
                         if (e.data.type === 'writeMemory') {
                             import('./db.js').then(async (dbModule) => {
                                 if (!aspect.memory) aspect.memory = {};
@@ -223,18 +256,20 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                             return; // Keep worker alive
                         }
 
+                        cleanup();
                         if (e.data.success) {
                             tool.state = e.data.state; // Update state
                             markChangesUnsaved();
                             resolve(e.data.result);
                         } else {
-                            reject(new Error(e.data.error));
+                            reject(new Error(e.data.error || "Unknown tool execution error"));
                         }
                         worker.terminate();
                         URL.revokeObjectURL(workerUrl);
                     };
                     worker.onerror = (err) => {
-                        reject(err);
+                        cleanup();
+                        reject(new Error(err.message || "Worker execution failed due to a syntax or runtime error."));
                         worker.terminate();
                         URL.revokeObjectURL(workerUrl);
                     };

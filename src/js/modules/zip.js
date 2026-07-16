@@ -235,12 +235,16 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
             const aspect = getCurrentAspect();
             if (!aspect) return;
 
+            const safeName = aspect.name.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+            const safeDesc = aspect.description.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+            const safeInstructions = aspect.instructions.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
             const htmlContent = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${aspect.name} - Aspect Card</title>
+    <title>${safeName} - Aspect Card</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -279,11 +283,11 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
 <body>
     <div class="card">
         <img class="icon" src="${aspect.icon || ''}" alt="Aspect Icon">
-        <h1>${aspect.name}</h1>
-        <p class="desc">${aspect.description}</p>
+        <h1>${safeName}</h1>
+        <p class="desc">${safeDesc}</p>
         <div class="details">
             <strong>System Prompt / Instructions:</strong><br><br>
-            ${aspect.instructions.replace(/</g, "&lt;").replace(/>/g, "&gt;")}
+            ${safeInstructions}
         </div>
         <div class="badge">Created with Aspect Studio</div>
     </div>
