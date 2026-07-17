@@ -1,5 +1,5 @@
 import { renderChatMessages, createStreamingBubble, updateStreamingBubble } from './chat.js';
-import { getKnowledgeFilesText } from './db.js';
+import { getKnowledgeFilesText, saveMemory } from './db.js';
 import { markChangesUnsaved, setChatLoadingState } from './ui.js';
 import { initWebLLMEngine } from './webllm.js';
 import { getCurrentAspect } from './aspects.js';
@@ -227,15 +227,17 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                         if (!e || !e.data) return;
 
                         if (e.data.type === 'writeMemory') {
-                            import('./db.js').then(async (dbModule) => {
-                                if (!aspect.memory) aspect.memory = {};
-                                aspect.memory[e.data.key] = e.data.value;
-                                await dbModule.saveMemory(aspect.id, aspect.memory);
-                                worker.postMessage({ type: 'memoryWriteComplete', messageId: e.data.messageId });
-                            }).catch((err) => {
-                                console.error("Failed to save aspect memory", err);
-                                worker.postMessage({ type: 'memoryWriteComplete', messageId: e.data.messageId, error: err.message });
-                            });
+                            (async () => {
+                                try {
+                                    if (!aspect.memory) aspect.memory = {};
+                                    aspect.memory[e.data.key] = e.data.value;
+                                    await saveMemory(aspect.id, aspect.memory);
+                                    worker.postMessage({ type: 'memoryWriteComplete', messageId: e.data.messageId });
+                                } catch (err) {
+                                    console.error("Failed to save aspect memory", err);
+                                    worker.postMessage({ type: 'memoryWriteComplete', messageId: e.data.messageId, error: err.message });
+                                }
+                            })();
                             return; // Keep worker alive for the final result
                         }
 

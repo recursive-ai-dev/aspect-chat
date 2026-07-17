@@ -1,5 +1,6 @@
 import { getCurrentAspect } from './aspects.js';
 import { updateAspectData } from './aspects.js';
+import { markChangesUnsaved, showToast } from './ui.js';
 
 let nodes = [];
 let connections = [];
@@ -271,11 +272,9 @@ export function saveWorkflowAsTool() {
             });
         }
 
-        import('./ui.js').then(ui => {
-            ui.markChangesUnsaved();
-            window.showToast(`Workflow saved as ${toolName}!`);
-            closeWorkflowModal();
-        });
+        markChangesUnsaved();
+        showToast(`Workflow saved as ${toolName}!`);
+        closeWorkflowModal();
     }
 }
 window.saveWorkflowAsTool = saveWorkflowAsTool;

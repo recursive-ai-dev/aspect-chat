@@ -4,6 +4,7 @@ import { saveAspectsToLocalStorage } from './state.js';
 import { showEditorView } from './ui.js';
 import { markChangesUnsaved } from './ui.js';
 import { state } from './state.js';
+import { systemTools } from './systemTools.js';
 
 
         export function getLakesideSageIcon() {
@@ -403,49 +404,46 @@ Keep your responses friendly, concise, and helpful.`,
         }
 
         export function acceptCreateAspectFromTemplate(templateId) {
-            import('./systemTools.js').then(module => {
-                const systemTools = module.systemTools;
-                const template = aspectTemplates.find(t => t.id === templateId) || aspectTemplates[0];
+            const template = aspectTemplates.find(t => t.id === templateId) || aspectTemplates[0];
 
-                const initialTools = [];
-                if (template.tools) {
-                    template.tools.forEach(toolRef => {
-                        if (typeof toolRef === 'string') {
-                            const sysTool = systemTools.find(st => st.name === toolRef);
-                            if (sysTool) {
-                                initialTools.push({ name: sysTool.name, code: sysTool.code, state: {} });
-                            }
-                        } else if (typeof toolRef === 'object' && toolRef !== null) {
-                            initialTools.push({
-                                name: toolRef.name,
-                                code: toolRef.code,
-                                state: toolRef.state || {}
-                            });
+            const initialTools = [];
+            if (template.tools) {
+                template.tools.forEach(toolRef => {
+                    if (typeof toolRef === 'string') {
+                        const sysTool = systemTools.find(st => st.name === toolRef);
+                        if (sysTool) {
+                            initialTools.push({ name: sysTool.name, code: sysTool.code, state: {} });
                         }
-                    });
-                }
+                    } else if (typeof toolRef === 'object' && toolRef !== null) {
+                        initialTools.push({
+                            name: toolRef.name,
+                            code: toolRef.code,
+                            state: toolRef.state || {}
+                        });
+                    }
+                });
+            }
 
-                const iconVal = typeof template.icon === 'function' ? template.icon() : (template.icon || getGenericIcon());
+            const iconVal = typeof template.icon === 'function' ? template.icon() : (template.icon || getGenericIcon());
 
-                const newAspect = {
-                    id: Date.now().toString(),
-                    name: template.name === 'Blank Aspect' ? 'New Aspect' : template.name,
-                    description: template.desc,
-                    instructions: template.instructions,
-                    knowledge: template.knowledge,
-                    icon: iconVal,
-                    background: template.background || 'alone_image_pack/lake_sunset_002.jpeg',
-                    tools: initialTools,
-                    chatHistory: template.chatHistory ? JSON.parse(JSON.stringify(template.chatHistory)) : []
-                };
+            const newAspect = {
+                id: Date.now().toString(),
+                name: template.name === 'Blank Aspect' ? 'New Aspect' : template.name,
+                description: template.desc,
+                instructions: template.instructions,
+                knowledge: template.knowledge,
+                icon: iconVal,
+                background: template.background || 'alone_image_pack/lake_sunset_002.jpeg',
+                tools: initialTools,
+                chatHistory: template.chatHistory ? JSON.parse(JSON.stringify(template.chatHistory)) : []
+            };
 
-                state.aspects.push(newAspect);
-                state.currentAspectId = newAspect.id;
-                renderAspectList();
-                showEditorView();
-                markChangesUnsaved();
-                document.getElementById('create-aspect-modal').classList.add('hidden');
-            });
+            state.aspects.push(newAspect);
+            state.currentAspectId = newAspect.id;
+            renderAspectList();
+            showEditorView();
+            markChangesUnsaved();
+            document.getElementById('create-aspect-modal').classList.add('hidden');
         }
 
         export function uploadCreateIcon(event) {
