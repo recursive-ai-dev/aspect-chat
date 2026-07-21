@@ -207,6 +207,7 @@ import { systemTools } from './systemTools.js';
                     }
                 } catch (e) {
                     console.error("Failed to load saved aspects from localStorage", e);
+                    state.aspects = [];
                 }
             }
 
