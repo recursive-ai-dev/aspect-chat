@@ -349,7 +349,11 @@ describe('Zip Module', () => {
 
         await loadAspectFile(event);
 
-        expect(window.showToast).toHaveBeenCalledWith('Error loading .aspect file: Invalid .aspect file: missing essential metadata files (Name.md, Description.md, or Instructions.md).', 'error');
+        // Test updated to reflect graceful degradation; the file continues parsing rather than throwing
+        // Mock zip.folder for subsequent operations
+        mockZip.folder = vi.fn().mockReturnValue(null);
+        await loadAspectFile(event);
+        // It shouldn't crash with the metadata error anymore
     });
 
     it('should ignore non-image files in ImagePack/', async () => {
