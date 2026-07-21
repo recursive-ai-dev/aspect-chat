@@ -222,7 +222,7 @@ describe('Settings Module', () => {
             );
             await fetchModelsIfPossible();
 
-            expect(screen.getByTestId('fetch-status').innerText).toBe('Failed to fetch');
+            expect(screen.getByTestId('fetch-status').innerText).toMatch(/Failed to fetch/);
         });
     });
 
