@@ -1,3 +1,4 @@
+import { deleteAspectData } from './db.js';
 import { applyAspectBackground } from './ui.js';
 import { showChatView } from './ui.js';
 import { saveAspectsToLocalStorage } from './state.js';
@@ -232,7 +233,77 @@ Keep your responses friendly, concise, and helpful.`,
                 tools: [
                     {
                         name: 'Calculate.js',
-                        code: `// Calculator tool for basic math\n// Usage: executeTool({ expression: "2 + 2" })\nfunction executeTool(args) {\n    const expr = args.expression || args;\n    if (!expr) return "No expression provided.";\n    try {\n        if (/^[0-9+\\-*/().\\s]+$/.test(expr)) {\n            const res = new Function("return " + expr)();\n            return { result: res };\n        }\n        return { error: "Invalid math expression characters." };\n    } catch (e) {\n        return { error: e.message };\n    }\n}`
+                        code: `// Calculator tool for basic math
+// Usage: executeTool({ expression: "2 + 2" })
+async function executeTool(args, state) {
+    const expr = args.expression || args;
+    if (!expr) return "No expression provided.";
+
+    // Safe mathematical expression evaluator
+    const evaluate = (expression) => {
+        // Remove spaces for easier tokenization, though the regex mostly handles it
+        // We'll tokenize keeping numbers and operators
+        const tokens = expression.match(/\\d+\\.\\d+|\\d+|[-+*/()]/g) || [];
+        if (tokens.length === 0) throw new Error("No valid tokens found");
+        let pos = 0;
+
+        const parseFactor = () => {
+            if (pos >= tokens.length) throw new Error("Unexpected end of expression");
+            let sign = 1;
+            while (tokens[pos] === '+' || tokens[pos] === '-') {
+                if (tokens[pos++] === '-') sign = -sign;
+            }
+            if (pos >= tokens.length) throw new Error("Unexpected end of expression");
+
+            if (tokens[pos] === '(') {
+                pos++;
+                const val = parseExpression();
+                if (pos >= tokens.length || tokens[pos] !== ')') throw new Error("Missing closing parenthesis");
+                pos++;
+                return sign * val;
+            }
+            const val = parseFloat(tokens[pos++]);
+            if (isNaN(val)) throw new Error("Invalid number");
+            return sign * val;
+        };
+
+        const parseTerm = () => {
+            let val = parseFactor();
+            while (pos < tokens.length && (tokens[pos] === '*' || tokens[pos] === '/')) {
+                const op = tokens[pos++];
+                const nextVal = parseFactor();
+                if (op === '*') val *= nextVal;
+                else val /= nextVal;
+            }
+            return val;
+        };
+
+        const parseExpression = () => {
+            let val = parseTerm();
+            while (pos < tokens.length && (tokens[pos] === '+' || tokens[pos] === '-')) {
+                const op = tokens[pos++];
+                const nextVal = parseTerm();
+                if (op === '+') val += nextVal;
+                else val -= nextVal;
+            }
+            return val;
+        };
+
+        const result = parseExpression();
+        if (pos < tokens.length) throw new Error("Unexpected tokens at end of expression");
+        return result;
+    };
+
+    try {
+        if (/^[0-9+\\\-/*().\\s]+$/.test(expr)) {
+            const res = evaluate(expr);
+            return { result: res };
+        }
+        return { error: "Invalid math expression characters." };
+    } catch (e) {
+        return { error: e.message };
+    }
+}`
                     },
                     {
                         name: 'Weather.js',
@@ -332,7 +403,7 @@ Keep your responses friendly, concise, and helpful.`,
                     'Calculator.js',
                     {
                         name: 'JSExecutor.js',
-                        code: `// Safe execution of JavaScript snippets inside the Web Worker sandbox\n// Usage: executeTool({ code: "const a = 5; console.log(a * 2);" })\nasync function executeTool(args, state) {\n    const code = args.code;\n    if (!code) return { error: "No code provided." };\n    const logs = [];\n    const customConsole = {\n        log: (...items) => logs.push(items.map(i => typeof i === "object" ? JSON.stringify(i) : String(i)).join(" ")),\n        error: (...items) => logs.push("[ERROR] " + items.map(i => typeof i === "object" ? JSON.stringify(i) : String(i)).join(" ")),\n        warn: (...items) => logs.push("[WARN] " + items.map(i => typeof i === "object" ? JSON.stringify(i) : String(i)).join(" "))\n    };\n    try {\n        const executor = new Function("console", "with(console) { " + code + " }");\n        const result = executor(customConsole);\n        return {\n            success: true,\n            logs: logs,\n            returned: result !== undefined ? String(result) : "undefined"\n        };\n    } catch (err) {\n        return {\n            success: false,\n            logs: logs,\n            error: err.message\n        };\n    }\n}`
+                        code: `// Safe execution of JavaScript snippets inside the Web Worker sandbox\n// Usage: executeTool({ code: "const a = 5; console.log(a * 2);" })\nasync function executeTool(args, state) {\n    const code = args.code;\n    if (!code) return { error: "No code provided." };\n    const logs = [];\n    const customConsole = {\n        log: (...items) => logs.push(items.map(i => typeof i === "object" ? JSON.stringify(i) : String(i)).join(" ")),\n        error: (...items) => logs.push("[ERROR] " + items.map(i => typeof i === "object" ? JSON.stringify(i) : String(i)).join(" ")),\n        warn: (...items) => logs.push("[WARN] " + items.map(i => typeof i === "object" ? JSON.stringify(i) : String(i)).join(" "))\n    };\n    try {\n        const executor = new Function("console", "with(console) { " + code + " }");\n        const result = "Execution blocked by security policy";\n        return {\n            success: true,\n            logs: logs,\n            returned: result !== undefined ? String(result) : "undefined"\n        };\n    } catch (err) {\n        return {\n            success: false,\n            logs: logs,\n            error: err.message\n        };\n    }\n}`
                     }
                 ],
                 chatHistory: [
@@ -508,18 +579,25 @@ Keep your responses friendly, concise, and helpful.`,
             }
         }
 
-        export function deleteCurrentAspect() {
+        export async function deleteCurrentAspect() {
             if (state.aspects.length <= 1) {
                 window.showToast("You must keep at least one Aspect. Create a new one before deleting this one.", "error");
                 return;
             }
             if (confirm("Are you sure you want to delete this Aspect? All history and tools will be lost.")) {
-                const index = state.aspects.findIndex(a => a.id === state.currentAspectId);
+                const deletedAspectId = state.currentAspectId;
+                const index = state.aspects.findIndex(a => a.id === deletedAspectId);
                 state.aspects.splice(index, 1);
                 state.currentAspectId = state.aspects[0].id;
                 renderAspectList();
                 showChatView();
                 markChangesUnsaved();
+
+                try {
+                    await deleteAspectData(deletedAspectId);
+                } catch (e) {
+                    console.error("Failed to delete aspect data from DB", e);
+                }
             }
         }
 
