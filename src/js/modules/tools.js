@@ -422,21 +422,36 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                 const apiMessages = buildApiMessages(aspect, systemPrompt, extraContext, state.settings.maxContext);
 
                 const endpoint = getApiEndpoint(state.settings.apiUrl);
-
-                const response = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${state.settings.apiKey}`
-                    },
-                    body: JSON.stringify({
-                        model: state.settings.model,
-                        messages: apiMessages,
-                        temperature: 0.7,
-                        stream: true
-                    }),
-                    signal: state.abortController.signal
-                });
+                let response;
+                try {
+                    response = await fetch(endpoint, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${state.settings.apiKey}`
+                        },
+                        body: JSON.stringify({
+                            model: state.settings.model,
+                            messages: apiMessages,
+                            temperature: 0.7,
+                            stream: true
+                        }),
+                        signal: state.abortController.signal
+                    });
+                } catch (err) {
+                    if (err.name === 'AbortError') {
+                        throw err;
+                    }
+                    const idx = aspect.chatHistory.findIndex(m => m.id === writingId);
+                    if (idx !== -1) {
+                        aspect.chatHistory.splice(idx, 1);
+                    }
+                    addSystemLog(`❌ **Error:** Network error: ${err.message}`);
+                    setChatLoadingState(false);
+                    renderChatMessages();
+                    state.abortController = null;
+                    return;
+                }
 
                 if (!response.ok) {
                     const errData = await response.json().catch(() => ({}));

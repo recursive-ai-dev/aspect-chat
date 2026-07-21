@@ -10,7 +10,7 @@
 |---|---|---|---|---|
 | Resilience | src/js/modules/aspects.js | `JSON.parse` fallback missing proper reset in `loadDefaultAspects` | Added `state.aspects = [];` in `catch` block | `aspects.test.js` passes with invalid JSON |
 | Bug / Resilience | src/js/modules/settings.js | Unhandled promise rejection on `fetch` network errors in `fetchProviderModels` | Wrapped `fetch` in `try...catch` and threw `Network error: ` | `settings.test.js` updated and passes |
-| Bug / Resilience | src/js/modules/tools.js | Unhandled promise rejection on `fetch` network errors in `fetchAIResponseForAspect` | Wrapped `fetch` in `try...catch` and threw `Network error: ` | `tools.test.js` passes cleanly |
+| Bug / Resilience | src/js/modules/tools.js | Unhandled promise rejection on `fetch` network errors in `fetchAIResponseForAspect` | Wrapped `fetch` in `try...catch` and handled inline gracefully | `tools.test.js` passes cleanly |
 
 ## 3. Escalations & Breaking Changes (If Any)
 - **Proposed Breaking Changes:** None.
