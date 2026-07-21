@@ -184,3 +184,33 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mj
             }
             event.target.value = '';
         }
+
+export async function deleteAspectData(aspectId) {
+    const db = await dbPromise;
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(['files', 'memory'], 'readwrite');
+
+        // Delete memory
+        const memoryStore = tx.objectStore('memory');
+        memoryStore.delete(aspectId);
+
+        // Delete files
+        const filesStore = tx.objectStore('files');
+        const fileIndex = filesStore.getAll();
+        fileIndex.onsuccess = () => {
+            fileIndex.result.forEach(f => {
+                if (f.aspectId === aspectId) {
+                    filesStore.delete([aspectId, f.name]);
+                }
+            });
+        };
+
+        tx.oncomplete = () => {
+            if (knowledgeCache && knowledgeCache[aspectId]) {
+                delete knowledgeCache[aspectId];
+            }
+            resolve();
+        };
+        tx.onerror = (e) => reject(e.target.error);
+    });
+}
