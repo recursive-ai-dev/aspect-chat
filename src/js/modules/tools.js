@@ -410,6 +410,9 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
 
             const writingId = addSystemLog(`*${aspect.name} is reflecting...*`);
             
+            if (state.abortController) {
+                state.abortController.abort();
+            }
             state.abortController = new AbortController();
 
             try {
