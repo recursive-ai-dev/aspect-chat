@@ -16,5 +16,5 @@
 | Dead Code / Leak | src/js/modules/aspects.js & db.js | Deleted aspects leave orphaned files and memory in IndexedDB | Added `deleteAspectData` and invoked it on aspect deletion | `db.js` handles cleanup |
 
 ## 3. Escalations & Breaking Changes (If Any)
-- **Proposed Breaking Changes:** None.
-- **Architectural Recommendations:** Re-evaluate global `fetch` calls across all services to implement a standardized fetch abstraction with baked-in `try...catch` and timeout logic to prevent silent unhandled promise rejections in the future.
+- **Proposed Breaking Changes:** None. Caching is removed, but behavior adheres to expected dynamic execution of stateful tools.
+- **Architectural Recommendations:** The web worker sandboxing logic in `executeJavaScriptTool` is quite manual. While functionally correct right now, transitioning to a dedicated worker pool strategy in the future could improve resilience under high concurrency load.
