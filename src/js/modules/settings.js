@@ -54,7 +54,12 @@ import { state } from './state.js';
                 headers['Authorization'] = `Bearer ${key}`;
             }
 
-            const response = await fetch(fetchUrl, { headers });
+            let response;
+            try {
+                response = await fetch(fetchUrl, { headers });
+            } catch (e) {
+                throw new Error(`Network error: ${e.message}`);
+            }
 
             if (!response.ok) {
                 let errMsg = response.statusText;
