@@ -423,7 +423,9 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
 
                 const endpoint = getApiEndpoint(state.settings.apiUrl);
 
-                const response = await fetch(endpoint, {
+                let response;
+                try {
+                    response = await fetch(endpoint, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -436,7 +438,11 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                         stream: true
                     }),
                     signal: state.abortController.signal
-                });
+                    });
+                } catch (err) {
+                    if (err.name === 'AbortError') throw err;
+                    throw new Error(`Network error: ${err.message}`);
+                }
 
                 if (!response.ok) {
                     const errData = await response.json().catch(() => ({}));
