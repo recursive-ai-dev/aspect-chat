@@ -346,7 +346,7 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
 
             for (let tc of toolCalls) {
                 const logId = addSystemLog(`Executing tool \`${tc.name}\`...`);
-                const result = await getCachedOrExecuteTool(tc.name, tc.args);
+                const result = await executeJavaScriptTool(tc.name, tc.args);
                 updateSystemLog(logId, `🛠️ **Tool Executed:** \`${tc.name}\`\n\n**Result:**\n\`\`\`json\n${result}\n\`\`\``);
                 toolResultsText += `Tool ${tc.name} returned:\n${result}\n\n`;
 
@@ -383,18 +383,7 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
         }
 
 
-        const toolCache = new Map();
 
-        async function getCachedOrExecuteTool(toolName, toolArgs) {
-            const cacheKey = `${state.currentAspectId}:${toolName}:${toolArgs}`;
-            if (toolCache.has(cacheKey)) {
-                addSystemLog(`⚡ **Cache Hit:** \`${toolName}\``);
-                return toolCache.get(cacheKey);
-            }
-            const result = await executeJavaScriptTool(toolName, toolArgs);
-            toolCache.set(cacheKey, result);
-            return result;
-        }
 
         export function abortAIRequest() {
             if (state.abortController) {
@@ -410,6 +399,9 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
 
             const writingId = addSystemLog(`*${aspect.name} is reflecting...*`);
             
+            if (state.abortController) {
+                state.abortController.abort();
+            }
             state.abortController = new AbortController();
 
             try {
@@ -423,7 +415,9 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
 
                 const endpoint = getApiEndpoint(state.settings.apiUrl);
 
-                const response = await fetch(endpoint, {
+                let response;
+                try {
+                    response = await fetch(endpoint, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -436,7 +430,11 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                         stream: true
                     }),
                     signal: state.abortController.signal
-                });
+                    });
+                } catch (err) {
+                    if (err.name === 'AbortError') throw err;
+                    throw new Error(`Network error: ${err.message}`);
+                }
 
                 if (!response.ok) {
                     const errData = await response.json().catch(() => ({}));
@@ -551,7 +549,7 @@ ${response}`);
             if (userToolCalls.length > 0) {
                 for (let tc of userToolCalls) {
                     const logId = addSystemLog(`Executing user-triggered tool \`${tc.name}\`...`);
-                    const result = await getCachedOrExecuteTool(tc.name, tc.args);
+                    const result = await executeJavaScriptTool(tc.name, tc.args);
                     updateSystemLog(logId, `🛠️ **User-Triggered Tool:** \`${tc.name}\`\n\n**Result:**\n\`\`\`json\n${result}\n\`\`\``);
                     userToolResults += `User executed tool ${tc.name} which returned:\n${result}\n\n`;
                 }
