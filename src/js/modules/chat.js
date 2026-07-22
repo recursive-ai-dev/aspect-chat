@@ -1,3 +1,4 @@
+import { state } from './state.js';
 import { getCurrentAspect } from './aspects.js';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
@@ -11,24 +12,45 @@ export function escapeHtml(str) {
 
         export function renderChatMessages() {
             const container = document.getElementById('chat-messages');
-            container.innerHTML = '';
             const aspect = getCurrentAspect();
-            if (!aspect || !aspect.chatHistory) return;
+            if (!aspect || !aspect.chatHistory) {
+                container.innerHTML = '';
+                return;
+            }
+
+            // Simple DOM diffing: ensure we have the right number of wrapper elements
+            while (container.children.length > aspect.chatHistory.length) {
+                container.removeChild(container.lastChild);
+            }
+            while (container.children.length < aspect.chatHistory.length) {
+                const wrapper = document.createElement('div');
+                container.appendChild(wrapper);
+            }
             
             aspect.chatHistory.forEach((msg, index) => {
-                const wrapper = document.createElement('div');
+                const wrapper = container.children[index];
                 const content = msg.content || '';
                 
                 if (msg.role === 'system') {
-                    wrapper.className = 'message-wrapper system-log';
-                    const bubble = document.createElement('div');
-                    // Use DOMPurify to prevent XSS attacks from model output
-                    bubble.innerHTML = DOMPurify.sanitize(marked.parse(content));
-                    wrapper.appendChild(bubble);
+                    if (wrapper.className !== 'message-wrapper system-log' || wrapper.children.length !== 1 || !wrapper.firstChild || wrapper.firstChild.className !== '') {
+                        wrapper.className = 'message-wrapper system-log';
+                        wrapper.innerHTML = '<div></div>';
+                    }
+                    const bubble = wrapper.firstChild;
+                    if (msg._renderedHtml === undefined || msg._renderedContent !== content) {
+                        msg._renderedHtml = DOMPurify.sanitize(marked.parse(content));
+                        msg._renderedContent = content;
+                    }
+                    if (bubble.innerHTML !== msg._renderedHtml) {
+                        bubble.innerHTML = msg._renderedHtml;
+                    }
                 } else {
-                    wrapper.className = `message-wrapper ${msg.role}`;
+                    if (wrapper.className !== `message-wrapper ${msg.role}`) {
+                        wrapper.className = `message-wrapper ${msg.role}`;
+                    }
                     
                     if (msg._isEditing) {
+                        wrapper.innerHTML = ''; // reset for edit view
                         const editorContainer = document.createElement('div');
                         editorContainer.className = 'inline-editor-container';
                         
@@ -57,24 +79,22 @@ export function escapeHtml(str) {
                         
                         wrapper.appendChild(editorContainer);
                     } else {
-                        const bubble = document.createElement('div');
-                        bubble.className = `message-bubble ${msg.role}`;
-                        // Escape user input, render and sanitize assistant output (memoized per content)
-                        let bubbleHtml;
-                        if (typeof msg === 'object' && msg !== null) {
-                            if (msg._renderedHtml === undefined || msg._renderedContent !== content) {
-                                msg._renderedHtml = msg.role === 'user' ? escapeHtml(content) : DOMPurify.sanitize(marked.parse(content));
-                                msg._renderedContent = content;
-                            }
-                            bubbleHtml = msg._renderedHtml;
-                        } else {
-                            bubbleHtml = msg.role === 'user' ? escapeHtml(content) : DOMPurify.sanitize(marked.parse(content));
+                        if (wrapper.children.length !== 2 || wrapper.firstChild.className !== `message-bubble ${msg.role}`) {
+                             wrapper.innerHTML = `<div class="message-bubble ${msg.role}"></div><div class="message-actions"></div>`;
                         }
-                        bubble.innerHTML = bubbleHtml;
+                        const bubble = wrapper.children[0];
+                        const actions = wrapper.children[1];
+
+                        // Escape user input, render and sanitize assistant output (memoized per content)
+                        if (msg._renderedHtml === undefined || msg._renderedContent !== content) {
+                            msg._renderedHtml = msg.role === 'user' ? escapeHtml(content) : DOMPurify.sanitize(marked.parse(content));
+                            msg._renderedContent = content;
+                        }
+                        if (bubble.innerHTML !== msg._renderedHtml) {
+                            bubble.innerHTML = msg._renderedHtml;
+                        }
                         
-                        const actions = document.createElement('div');
-                        actions.className = 'message-actions';
-                        
+                        // We must bind correct index to action buttons every time because indices can shift
                         if (msg.role === 'user') {
                             actions.innerHTML = `
                                 <button class="msg-action-btn" onclick="editMessage(${index})" title="Edit message">✏️</button>
@@ -86,18 +106,14 @@ export function escapeHtml(str) {
                                 <button class="msg-action-btn" onclick="deleteMessage(${index})" title="Delete message">🗑️</button>
                             `;
                         }
-                        
-                        wrapper.appendChild(bubble);
-                        wrapper.appendChild(actions);
                     }
                 }
-                
-                container.appendChild(wrapper);
             });
             container.scrollTop = container.scrollHeight;
         }
 
         export function deleteMessage(index) {
+            if (state.abortController) return; // Prevent deleting while generating
             const aspect = getCurrentAspect();
             if (!aspect || !aspect.chatHistory) return;
             aspect.chatHistory.splice(index, 1);
@@ -106,6 +122,7 @@ export function escapeHtml(str) {
         }
 
         export async function regenerateMessage(index) {
+            if (state.abortController) return; // Prevent regenerating while already generating
             const aspect = getCurrentAspect();
             if (!aspect || !aspect.chatHistory) return;
             // Delete this message and all subsequent messages
@@ -116,6 +133,7 @@ export function escapeHtml(str) {
         }
 
         export function editMessage(index) {
+            if (state.abortController) return; // Prevent editing while generating
             const aspect = getCurrentAspect();
             if (!aspect || !aspect.chatHistory) return;
             
