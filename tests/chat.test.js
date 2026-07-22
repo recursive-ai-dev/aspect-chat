@@ -161,7 +161,7 @@ describe('Chat UI Interactions', () => {
 
     describe('regenerateMessage', () => {
         it('should splice history and send AI request', async () => {
-            const aspect = { chatHistory: [1, 2, 3] };
+            const aspect = { chatHistory: [{ role: 'user', content: '1' }, { role: 'assistant', content: '2' }, { role: 'user', content: '3' }] };
             aspects.getCurrentAspect.mockReturnValue(aspect);
             await chatModule.regenerateMessage(1);
             expect(aspect.chatHistory.length).toBe(1);
