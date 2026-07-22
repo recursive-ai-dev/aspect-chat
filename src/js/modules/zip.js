@@ -37,8 +37,8 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
                     }
                 } else {
                     try {
-                        const response = await fetch(`./${aspect.background}`);
-                        if (response.ok) {
+                        const response = await fetch(`./${aspect.background}`).catch(() => null);
+                        if (response && response.ok) {
                             const blob = await response.blob();
                             zip.file("Background.jpeg", blob);
                         }
