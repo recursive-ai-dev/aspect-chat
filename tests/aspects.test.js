@@ -117,10 +117,14 @@ describe('Aspects Management', () => {
         });
 
         it('should load default Studio Guide if localStorage is invalid JSON', async () => {
+            const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
             localStorage.setItem('aspects_data', 'invalid json');
             aspects.loadDefaultAspects();
             expect(state.aspects.length).toBe(1);
             expect(state.aspects[0].id).toBe('studio-guide');
+
+            spy.mockRestore();
         });
     });
 
