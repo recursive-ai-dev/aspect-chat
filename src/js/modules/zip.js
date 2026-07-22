@@ -102,13 +102,11 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
                 const descFile = zip.file("Description.md");
                 const instrFile = zip.file("Instructions.md");
                 
-                if (!nameFile || !descFile || !instrFile) {
-                    throw new Error("Invalid .aspect file: missing essential metadata files (Name.md, Description.md, or Instructions.md).");
-                }
+                // Removed strict validation to allow graceful degradation when files are missing or malformed
 
-                const name = (await nameFile.async("string")).trim();
-                const desc = (await descFile.async("string")).trim();
-                const instr = (await instrFile.async("string")).trim();
+                const name = nameFile ? (await nameFile.async("string")).trim() : "Imported Aspect";
+                const desc = descFile ? (await descFile.async("string")).trim() : "";
+                const instr = instrFile ? (await instrFile.async("string")).trim() : "";
                 
                 const knowledgeFile = zip.file("Knowledge/KnowledgeFile.md");
                 const knowledge = knowledgeFile ? await knowledgeFile.async("string") : "";
