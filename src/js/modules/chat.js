@@ -1,3 +1,4 @@
+import { state } from './state.js';
 import { getCurrentAspect } from './aspects.js';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
@@ -112,6 +113,7 @@ export function escapeHtml(str) {
         }
 
         export function deleteMessage(index) {
+            if (state.abortController) return; // Prevent deleting while generating
             const aspect = getCurrentAspect();
             if (!aspect || !aspect.chatHistory) return;
             aspect.chatHistory.splice(index, 1);
@@ -120,6 +122,7 @@ export function escapeHtml(str) {
         }
 
         export async function regenerateMessage(index) {
+            if (state.abortController) return; // Prevent regenerating while already generating
             const aspect = getCurrentAspect();
             if (!aspect || !aspect.chatHistory) return;
             // Delete this message and all subsequent messages
@@ -130,6 +133,7 @@ export function escapeHtml(str) {
         }
 
         export function editMessage(index) {
+            if (state.abortController) return; // Prevent editing while generating
             const aspect = getCurrentAspect();
             if (!aspect || !aspect.chatHistory) return;
             
