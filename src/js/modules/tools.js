@@ -122,24 +122,21 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
 
             const endpoint = getApiEndpoint(state.settings.apiUrl);
 
-            let response;
-            try {
-                response = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${state.settings.apiKey}`
-                    },
-                    body: JSON.stringify({
-                        model: state.settings.model,
-                        messages: apiMessages,
-                        temperature: 0.7,
-                        stream: false // Non-streaming for summons
-                    })
-                });
-            } catch (err) {
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${state.settings.apiKey}`
+                },
+                body: JSON.stringify({
+                    model: state.settings.model,
+                    messages: apiMessages,
+                    temperature: 0.7,
+                    stream: false // Non-streaming for summons
+                })
+            }).catch(err => {
                 throw new Error(`Network error: ${err.message}`);
-            }
+            });
 
             if (!response.ok) {
                 const errData = await response.json().catch(() => ({}));

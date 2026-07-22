@@ -13,7 +13,7 @@ vi.mock('../src/js/modules/ui.js', () => ({
 }));
 
 vi.mock('../src/js/modules/tools.js', () => ({
-    sendAIRequest: vi.fn()
+    sendAIRequest: vi.fn().mockResolvedValue()
 }));
 
 describe('escapeHtml', () => {

@@ -166,7 +166,7 @@ export function escapeHtml(str) {
                 aspect.chatHistory.splice(index + 1);
                 markChangesUnsaved();
                 renderChatMessages();
-                sendAIRequest(); // auto regenerate
+                sendAIRequest().catch(console.error); // auto regenerate
             } else {
                 renderChatMessages();
             }
