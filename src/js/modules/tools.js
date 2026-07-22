@@ -414,6 +414,8 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                 const apiMessages = buildApiMessages(aspect, systemPrompt, extraContext, state.settings.maxContext);
 
                 const endpoint = getApiEndpoint(state.settings.apiUrl);
+
+
                 let response;
                 try {
                     response = await fetch(endpoint, {
