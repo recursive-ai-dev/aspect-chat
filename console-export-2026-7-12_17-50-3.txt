@@ -1,6 +1,0 @@
-[vite] connecting... client:851:9
-[vite] connected. client:955:12
-Uncaught TypeError: can't access property "value", document.getElementById(...) is null
-    acceptCreateAspect aspects.js:464
-    onclick (index):1
-2 aspects.js:464:35
