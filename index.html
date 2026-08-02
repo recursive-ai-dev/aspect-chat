@@ -12,9 +12,6 @@
 </head>
 <body>
 
-
-    </div>
-
     <!-- SETTINGS MODAL -->
     <div id="settings-modal" class="hidden" style="position: fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); display:flex; justify-content:center; align-items:center; z-index: 50; backdrop-filter: blur(4px);">
         <div class="modal-content" style="max-width: 440px; text-align: left; padding-top: 30px;">
@@ -127,14 +124,6 @@
 
             <div style="text-align: center;">
                 <button class="settings-btn danger-btn" style="width: auto; padding: 10px 20px;" onclick="cancelCreateAspect()">Cancel</button>
-            </div>
-        </div>
-    </div>
-                </div>
-            </div>
-            <div class="modal-nav-btns" style="margin-top: 25px;">
-                <button class="settings-btn danger-btn" onclick="cancelCreateAspect()">Cancel / Remove</button>
-                <button class="save-btn" onclick="acceptCreateAspect()">Accept / Create</button>
             </div>
         </div>
     </div>
@@ -273,15 +262,6 @@
                             <div style="margin-top: 10px; text-align: center;">
                                 <button class="settings-btn" onclick="document.getElementById('upload-knowledge-input').click()" style="margin: 0 auto; display: inline-block; width: auto; font-size: 0.9rem; padding: 5px 10px;">📂 Upload Files (.txt, .md, .pdf, .docx)</button>
                                 <input type="file" id="upload-knowledge-input" accept=".txt,.md,.pdf,.docx" multiple class="hidden" onchange="uploadKnowledgeFiles(event)">
-                    <div class="editor-field">
-                        <label>Injectable JS Tools</label>
-                        <div style="border: 2px dashed var(--border-color); padding: 15px; border-radius: 12px; text-align: center; background: var(--bg-input);">
-                            <p style="font-size: 0.9rem; margin-bottom: 10px; color: var(--text-light);">Define tools for your Aspect to run autonomously.</p>
-                            <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
-                                <button class="settings-btn" onclick="openSystemToolsModal()">➕ Add System Tool</button>
-                                <button class="settings-btn" onclick="openToolEditor()">✏️ New Tool</button>
-                                <button class="settings-btn" onclick="document.getElementById('upload-tools-input').click()">📂 Upload .js</button>
-                            <button class="settings-btn" onclick="openWorkflowModal()">✨ Visual Builder</button>
                             </div>
                         </div>
 
@@ -293,6 +273,7 @@
                                     <button class="settings-btn" onclick="openSystemToolsModal()">➕ Add System Tool</button>
                                     <button class="settings-btn" onclick="openToolEditor()">✏️ New Tool</button>
                                     <button class="settings-btn" onclick="document.getElementById('upload-tools-input').click()">📂 Upload .js</button>
+                                    <button class="settings-btn" onclick="openWorkflowModal()">✨ Visual Builder</button>
                                 </div>
                                 <input type="file" id="upload-tools-input" accept=".js" multiple class="hidden" onchange="uploadTools(event)">
                                 <div class="file-list" id="tools-list" style="margin-top: 15px; text-align: left;">

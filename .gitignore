@@ -1,3 +1,5 @@
 node_modules/
 ASSESSMENT.md
 Aspects_Design.md
+dist/
+coverage/
