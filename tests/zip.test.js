@@ -126,8 +126,8 @@ describe('Zip Module', () => {
         // This should not throw, it should catch the JSON parses and log errors
         await loadAspectFile(event);
 
-        expect(console.error).toHaveBeenCalledWith('Failed to parse tool state.json');
-        expect(console.error).toHaveBeenCalledWith('Failed to parse memory.json');
+        expect(console.error).toHaveBeenCalledWith('Failed to parse tool state.json during aspect import', expect.any(String));
+        expect(console.error).toHaveBeenCalledWith('Failed to parse memory.json during aspect import', expect.any(String));
         
         const addedAspect = state.aspects[0];
         expect(addedAspect.icon).toBe('data:image/png;base64,mock-b64-icon');

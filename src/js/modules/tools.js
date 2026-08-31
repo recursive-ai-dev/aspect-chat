@@ -76,7 +76,7 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                         updateStreamingBubble(bubbleElement, aiMessage);
                     }
                 } catch (e) {
-                    // Ignore partial JSON
+                    console.warn("Failed to parse SSE JSON chunk", e.message, dataStr);
                 }
             }
         }
@@ -95,7 +95,7 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                         if (bubbleElement) updateStreamingBubble(bubbleElement, aiMessage);
                     }
                 } catch (e) {
-                    // Ignore partial JSON
+                    console.warn("Failed to parse SSE JSON chunk", e.message, dataStr);
                 }
             }
         }

@@ -20,7 +20,8 @@
             <div class="settings-form">
                 <label>Service Provider Template</label>
                 <select id="api-provider-select" onchange="onProviderSelect()" style="padding: 10px; border: 3px solid var(--border-color); border-radius: 8px; font-family: 'Balsamiq Sans', cursive; font-size: 0.95rem; background: var(--bg-input);">
-                    <option value="custom">Custom</option>\n                    <option value="webllm">WebLLM (In-Browser Offline)</option>
+                    <option value="custom">Custom</option>
+                    <option value="webllm">WebLLM (In-Browser Offline)</option>
                     <option value="https://api.cohere.ai/v1">Cohere</option>
                     <option value="https://api.groq.com/openai/v1">Groq</option>
                     <option value="https://api.cerebras.ai/v1">Cerebras</option>
@@ -82,8 +83,6 @@
         </div>
     </div>
 
-    <!-- CREATE ASPECT MODAL -->
-
     <!-- Workflow Builder Modal -->
     <div id="workflow-modal" class="hidden" style="position: fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); display:flex; justify-content:center; align-items:center; z-index: 60; backdrop-filter: blur(4px);">
         <div style="background: var(--surface-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px; width: 900px; height: 80vh; display: flex; flex-direction: column; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
@@ -112,6 +111,7 @@
         </div>
     </div>
 
+    <!-- CREATE ASPECT MODAL -->
     <div id="create-aspect-modal" class="hidden" style="position: fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); display:flex; justify-content:center; align-items:center; z-index: 50; backdrop-filter: blur(4px);">
         <div class="modal-content" style="max-width: 600px; text-align: left; padding-top: 30px; max-height: 90vh; overflow-y: auto;">
             <button class="close-modal-btn" onclick="cancelCreateAspect()">✕</button>

@@ -1,4 +1,12 @@
 # 🔧 Autonomous Code Improvement & Stabilization Log
+
+> **Historical log — see `SECURITY.md` for current, up-to-date status.**
+> One entry below ("Blocked dynamic string execution" in `JSExecutor.js`) was
+> superseded during the client handoff pass: the original fix left an unused
+> `new Function()` construction and always reported fake success without
+> running anything. It now returns an honest `success: false` with a clear
+> explanation instead. See `SECURITY.md` item 1 for the current behavior.
+
 ## 1. Executive Summary
 - **Scanned Modules / Directories:** `src/js/modules/`
 - **Total Defected Issues Identified:** 6
