@@ -137,7 +137,7 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
                         try {
                             toolsState = JSON.parse(stateJsonStr);
                         } catch (e) {
-                            console.error("Failed to parse tool state.json");
+                            console.error("Failed to parse tool state.json during aspect import", e.message);
                         }
                     }
 
@@ -163,7 +163,7 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
                     try {
                         memory = JSON.parse(memoryStr);
                     } catch (e) {
-                        console.error("Failed to parse memory.json");
+                        console.error("Failed to parse memory.json during aspect import", e.message);
                     }
                 }
 

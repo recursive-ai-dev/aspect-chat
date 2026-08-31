@@ -63,7 +63,9 @@ import { state } from './state.js';
                 try {
                     const errData = await response.json();
                     errMsg = errData.error?.message || errData.message || errMsg;
-                } catch(e){}
+                } catch(e){
+                    console.warn("Failed to parse error response JSON", e.message);
+                }
                 if (response.status === 401 || response.status === 403) {
                     throw new Error(`Unauthorized or invalid API key (${response.status}).`);
                 } else if (response.status === 429) {
