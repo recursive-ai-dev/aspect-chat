@@ -256,16 +256,17 @@
                         <label>Aspect icon</label>
                         <div class="icon-preview-container">
                             <img id="icon-preview" src="" alt="Aspect icon">
-                            <div>
-                                <input type="file" id="upload-icon-input" accept="image/*">
+                            <div class="icon-controls">
+                                <div class="icon-btn-row">
+                                    <button type="button" class="settings-btn inline-btn" data-action="upload-icon">📂 Upload</button>
+                                    <button type="button" id="generate-icon-btn" class="settings-btn inline-btn" data-action="generate-icon">✨ Generate</button>
+                                </div>
+                                <input type="file" id="upload-icon-input" accept="image/*" class="hidden">
                                 <div class="file-list" id="icon-filename">No icon uploaded</div>
                             </div>
                         </div>
-                        <div class="icon-gen-row">
-                            <input type="text" id="icon-gen-prompt" placeholder="Describe an icon… e.g. 'a wise owl at dusk'" autocomplete="off">
-                            <button type="button" id="generate-icon-btn" class="settings-btn" data-action="generate-icon">✨ Generate icon</button>
-                        </div>
-                        <p class="field-hint">Generates via <strong>pollinations.ai</strong> (a free image service) and saves the result into the Aspect. This is the only outbound call the app makes that isn't to your own model endpoint.</p>
+                        <input type="text" id="icon-gen-prompt" class="icon-gen-prompt" placeholder="Describe an icon for “✨ Generate”… e.g. a wise owl at dusk" autocomplete="off">
+                        <p class="field-hint"><strong>✨ Generate</strong> uses <strong>pollinations.ai</strong> (a free image service) and saves the result into the Aspect — the only outbound call the app makes that isn't to your own model endpoint.</p>
                     </div>
 
                     <div class="editor-field">

@@ -178,6 +178,7 @@ const ACTIONS = {
     'show-editor': showEditorView,
     'show-chat': showChatView,
 
+    'upload-icon': () => click('upload-icon-input'),
     'upload-background': () => click('upload-bg-input'),
     'upload-knowledge': () => click('upload-knowledge-input'),
     'upload-tools': () => click('upload-tools-input'),

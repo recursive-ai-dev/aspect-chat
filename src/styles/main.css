@@ -512,17 +512,22 @@ select {
 .snapshot-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .snapshot-row button { flex: none; }
 
-/* Icon generation row */
-.icon-gen-row {
+/* Icon controls (upload / generate) */
+.icon-controls {
     display: flex;
+    flex-direction: column;
     gap: 8px;
-    margin-top: 10px;
-}
-.icon-gen-row input {
-    flex: 1;
     min-width: 0;
 }
-.icon-gen-row button { flex: none; }
+.icon-btn-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.icon-gen-prompt {
+    margin-top: 10px;
+    width: 100%;
+}
 
 /* ---------------------------------------------------------------- *
  * Sidebar
