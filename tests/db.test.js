@@ -182,13 +182,14 @@ describe('Database and Cache module - uploadKnowledgeFiles', () => {
         await uploadKnowledgeFiles(mockEvent);
 
         expect(window.showToast).toHaveBeenCalledWith('Unsupported file type: unknown', 'error');
-        expect(window.showToast).toHaveBeenCalledWith(expect.stringContaining('Successfully processed and saved 4 file(s)'));
+        expect(window.showToast).toHaveBeenCalledWith(expect.stringContaining('Attached 4 file(s)'));
         expect(mockEvent.target.value).toBe('');
 
+        // Uploading must not rewrite the user's own Knowledge prompt. Attached
+        // files are injected into context automatically and listed in the editor.
         const knInput = document.getElementById('edit-knowledge');
-        expect(knInput.value).toContain('Old Knowledge');
-        expect(knInput.value).toContain('4 file(s) have been uploaded');
-        expect(aspects.updateAspectData).toHaveBeenCalledWith('knowledge', knInput.value);
+        expect(knInput.value).toBe('Old Knowledge');
+        expect(aspects.updateAspectData).not.toHaveBeenCalled();
     });
 
     it('should catch error when saveKnowledgeFile fails', async () => {

@@ -126,20 +126,44 @@ describe('Chat UI Interactions', () => {
             expect(aspects.getCurrentAspect().chatHistory[0].content).toBe('Hello');
         });
         
-        it('should bind deleteMessage correctly for user and assistant', () => {
-            aspects.getCurrentAspect.mockReturnValue({
+        it('should offer the right actions per role and act on the right message', () => {
+            const aspect = {
+                name: 'A', description: '',
                 chatHistory: [
                     { role: 'user', content: 'Hello' },
                     { role: 'assistant', content: 'Hi' }
                 ]
-            });
-            // We'll test HTML presence since inline handlers are tested implicitly or mockably
+            };
+            aspects.getCurrentAspect.mockReturnValue(aspect);
             chatModule.renderChatMessages();
+
             const container = document.getElementById('chat-messages');
-            expect(container.innerHTML).toContain('editMessage(0)');
-            expect(container.innerHTML).toContain('deleteMessage(0)');
-            expect(container.innerHTML).toContain('regenerateMessage(1)');
-            expect(container.innerHTML).toContain('deleteMessage(1)');
+            const rows = container.querySelectorAll('.message-actions');
+            expect(rows.length).toBe(2);
+
+            const titles = row => Array.from(row.querySelectorAll('.msg-action-btn')).map(b => b.title);
+            expect(titles(rows[0])).toEqual(['Copy message', 'Edit message', 'Delete message']);
+            expect(titles(rows[1])).toEqual(['Copy message', 'Regenerate from here', 'Delete message']);
+
+            // Handlers are rebound on every render, so index 0's delete must
+            // remove the first message rather than a stale one.
+            rows[0].querySelector('[title="Delete message"]').click();
+            expect(aspect.chatHistory.length).toBe(1);
+            expect(aspect.chatHistory[0].content).toBe('Hi');
+        });
+
+        it('shows an empty state instead of a blank pane for a new conversation', () => {
+            aspects.getCurrentAspect.mockReturnValue({
+                name: 'Fresh Aspect',
+                description: 'Ready when you are.',
+                chatHistory: []
+            });
+            chatModule.renderChatMessages();
+
+            const empty = document.getElementById('chat-messages').querySelector('.chat-empty-state');
+            expect(empty).not.toBeNull();
+            expect(empty.textContent).toContain('Fresh Aspect');
+            expect(empty.textContent).toContain('Ready when you are.');
         });
     });
 

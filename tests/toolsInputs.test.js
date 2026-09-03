@@ -17,6 +17,7 @@ vi.mock('../src/js/modules/ui.js', () => ({
     setChatLoadingState: vi.fn(),
     addSystemLog: vi.fn(),
     updateSystemLog: vi.fn(),
+    renderConversationList: vi.fn(),
 }));
 
 vi.mock('../src/js/modules/chat.js', () => ({

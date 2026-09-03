@@ -16,3 +16,15 @@
 - **Recommended fix:** Refactor `saveKnowledgeFile` to accept an array of `{aspectId, name, text}` entries and write them within a single `readwrite` transaction. Expected to cut IndexedDB overhead by 80-90% for multi-file/multi-page uploads.
 - **Regression risk if implemented:** Verify that a failure partway through a batch correctly handles rollback or partial successes without corrupting the knowledge cache.
 - **User-facing impact today:** Only noticeable when uploading many knowledge files or a very large multi-page PDF at once; a single-file upload is unaffected.
+
+### 3. [RESOLVED] Full-Library Serialisation On Every Keystroke
+- **Location:** previously `src/js/modules/state.js` (`saveAspectsToLocalStorage`), called from `markChangesUnsaved` on every `oninput` event.
+- **Root Cause:** each keystroke in the Aspect editor ran `JSON.stringify` over the entire Aspect library — every persona, every tool's source, every base64 icon and background, and the full chat history — and wrote the result synchronously to `localStorage`, blocking the main thread. Cost grew with the size of the whole library, not with the size of the edit.
+- **Fix Applied:** writes go to IndexedDB through `persist.js` and are debounced (400 ms), so a burst of typing produces one write instead of one per character. `flushSave()` is called on `visibilitychange`, `pagehide` and `beforeunload` so nothing is lost to the debounce window. The live `chatHistory` alias is stripped before serialisation, halving the serialised size of every conversation.
+- **Regression Risk:** verify that edits made immediately before closing a tab still persist; `tests/persist.test.js` covers the debounce-collapse and flush paths.
+
+### 4. [RESOLVED] WebLLM Bundled Into The Critical Path
+- **Location:** `src/js/modules/webllm.js`.
+- **Root Cause:** `@mlc-ai/web-llm` was imported statically, putting ~6 MB (2.1 MB gzipped) of in-browser inference runtime into the initial page load for every user, including the large majority who point Aspect Studio at a server and never touch WebLLM.
+- **Fix Applied:** the module is now loaded with a dynamic `import()` on first use. Vite emits it as a separate chunk with no `modulepreload` hint, so it is fetched only when a WebLLM model is actually selected.
+- **Measurement:** the eager entry bundle is 1.53 MB (449 KB gzipped); the WebLLM chunk is 6.04 MB and is no longer part of it.

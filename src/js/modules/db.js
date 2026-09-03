@@ -1,25 +1,14 @@
 import { getCurrentAspect } from './aspects.js';
-import { updateAspectData } from './aspects.js';
+
 import * as pdfjsLib from 'pdfjs-dist';
 import * as mammoth from 'mammoth';
+import { getDB } from './idb.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mjs', import.meta.url).toString();
 
-
-        let dbPromise = new Promise((resolve, reject) => {
-            const request = indexedDB.open('AspectKnowledgeDB', 2);
-            request.onupgradeneeded = (e) => {
-                const db = e.target.result;
-                if (!db.objectStoreNames.contains('files')) {
-                    db.createObjectStore('files', { keyPath: ['aspectId', 'name'] });
-                }
-                if (!db.objectStoreNames.contains('memory')) {
-                    db.createObjectStore('memory', { keyPath: 'aspectId' });
-                }
-            };
-            request.onsuccess = (e) => resolve(e.target.result);
-            request.onerror = (e) => reject(e.target.error);
-        });
+        // The database connection (including the Aspect store) lives in idb.js
+        // so there is a single schema-upgrade handler for the whole app.
+        const dbPromise = getDB();
 
         export async function saveMemory(aspectId, memoryObj) {
             const db = await dbPromise;
@@ -177,13 +166,34 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mj
             await Promise.all(uploadPromises);
 
             if (processedCount > 0) {
-                const knInput = document.getElementById('edit-knowledge');
-                knInput.value = knInput.value + `\n\n> Note: ${processedCount} file(s) have been uploaded to internal DOM storage. Their contents will be automatically appended to the context.`;
-                updateAspectData('knowledge', knInput.value);
-                window.showToast(`Successfully processed and saved ${processedCount} file(s) to internal storage.`);
+                // The files are attached to the Aspect and injected into context
+                // automatically. Previously this also appended a note into the
+                // Knowledge textarea on every upload, which slowly filled the
+                // user's own prompt with boilerplate; the file list in the
+                // editor shows what is attached instead.
+                window.showToast(`Attached ${processedCount} file(s) to this Aspect's knowledge.`);
+                if (typeof window.renderKnowledgeFileList === 'function') {
+                    window.renderKnowledgeFileList();
+                }
             }
             event.target.value = '';
         }
+
+export async function deleteKnowledgeFile(aspectId, name) {
+    await initCache();
+    const db = await dbPromise;
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction('files', 'readwrite');
+        tx.objectStore('files').delete([aspectId, name]);
+        tx.oncomplete = () => {
+            if (knowledgeCache[aspectId]) {
+                knowledgeCache[aspectId] = knowledgeCache[aspectId].filter(f => f.name !== name);
+            }
+            resolve();
+        };
+        tx.onerror = (e) => reject(e.target.error);
+    });
+}
 
 export async function deleteAspectData(aspectId) {
     const db = await dbPromise;

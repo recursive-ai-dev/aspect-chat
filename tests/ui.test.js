@@ -6,8 +6,16 @@ import * as aspectsModule from '../src/js/modules/aspects.js';
 import * as toolsModule from '../src/js/modules/tools.js';
 
 vi.mock('../src/js/modules/state.js', () => ({
-    state: { hasUnsavedChanges: false },
-    saveAspectsToLocalStorage: vi.fn(),
+    state: { hasUnsavedChanges: false, settings: { provider: 'custom', apiUrl: '', model: '' } },
+    persistAspects: vi.fn(),
+    flushAspects: vi.fn(),
+    DEFAULT_PARAMS: { temperature: 0.7, maxTokens: 0, topP: 1 },
+    getGenerationParams: vi.fn(() => ({ temperature: 0.7, maxTokens: 0, topP: 1 })),
+}));
+
+vi.mock('../src/js/modules/db.js', () => ({
+    getKnowledgeFilesRaw: vi.fn().mockResolvedValue([]),
+    deleteKnowledgeFile: vi.fn().mockResolvedValue(undefined)
 }));
 
 vi.mock('../src/js/modules/aspects.js', () => ({
@@ -112,13 +120,13 @@ describe('UI Module', () => {
     });
 
     describe('markChangesUnsaved', () => {
-        it('should update UI and call saveAspectsToLocalStorage', () => {
+        it('should update UI and persist the Aspect library', () => {
             ui.markChangesUnsaved();
             
             expect(stateModule.state.hasUnsavedChanges).toBe(true);
             expect(document.getElementById('save-reminder')).not.toHaveClass('hidden');
             expect(document.getElementById('sidebar-save-btn')).toHaveClass('pulsate');
-            expect(stateModule.saveAspectsToLocalStorage).toHaveBeenCalled();
+            expect(stateModule.persistAspects).toHaveBeenCalled();
         });
     });
 
@@ -132,12 +140,15 @@ describe('UI Module', () => {
     });
 
     describe('setChatLoadingState', () => {
-        it('should disable chat input and show stop button when loading', () => {
+        it('should block sending and show stop button when loading', () => {
             ui.setChatLoadingState(true);
             expect(document.getElementById('send-btn').disabled).toBe(true);
             expect(document.getElementById('send-btn')).toHaveClass('hidden');
             expect(document.getElementById('stop-btn')).not.toHaveClass('hidden');
-            expect(document.getElementById('chat-input').disabled).toBe(true);
+            // The textarea stays usable so the next message can be drafted
+            // while the model is still streaming its answer.
+            expect(document.getElementById('chat-input').disabled).toBe(false);
+            expect(document.getElementById('chat-input').getAttribute('data-generating')).toBe('true');
         });
 
         it('should enable chat input and hide stop button when not loading', () => {
@@ -342,7 +353,11 @@ describe('UI Module', () => {
             expect(document.getElementById('chat-aspect-name')).toHaveProperty('innerText', 'Chat Aspect');
             
             const toolsDropdown = document.getElementById('tools-dropdown');
-            expect(toolsDropdown.children.length).toBe(2); // 'Run All Tools' + Tool1
+            // Only the Aspect's own tools. The old 'Run All Tools' entry
+            // inserted [Run Tool: RunAll], which matched no tool and always
+            // came back as "Tool not found".
+            expect(toolsDropdown.children.length).toBe(1);
+            expect(toolsDropdown.children[0].innerText).toBe('Tool1');
         });
     describe('populateAspectSettings', () => {
         it('should populate settings correctly with presets', () => {
@@ -396,6 +411,7 @@ describe('UI Module', () => {
             stateModule.state.aspects = [aspect];
             stateModule.state.currentAspectId = '1';
             
+            const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
             ui.showEditorView(false);
             
             // Get delete button
@@ -500,4 +516,119 @@ describe('UI Module', () => {
     });
 });
 
+});
+
+describe('Basic / Advanced instruction modes', () => {
+    beforeEach(() => {
+        document.body.innerHTML = `
+            <div id="toast-container"></div>
+            <div id="save-reminder" class="hidden"></div>
+            <button id="sidebar-save-btn"></button>
+            <textarea id="edit-instructions"></textarea>
+            <textarea id="edit-basic-instructions"></textarea>
+            <input type="range" id="edit-basic-tone" min="1" max="5" value="3" />
+            <span id="tone-label"></span>
+            <input type="checkbox" id="advanced-mode-toggle" />
+            <span id="advanced-mode-slider"></span>
+            <div id="basic-config-area"></div>
+            <div id="advanced-config-area" class="hidden"></div>
+        `;
+    });
+
+    it('round-trips a prompt that Basic mode generated', () => {
+        const generated = ui.composeBasicInstructions('Review my Python', 4);
+        const parsed = ui.parseBasicInstructions(generated);
+
+        expect(parsed).toEqual({ description: 'Review my Python', tone: 4 });
+    });
+
+    it('refuses to parse a hand-written prompt', () => {
+        // Returning null here is what stops Basic mode from silently
+        // flattening a custom system prompt.
+        expect(ui.parseBasicInstructions('You are the Aspect Studio Guide. Teach the user.')).toBeNull();
+        expect(ui.parseBasicInstructions('')).toBeNull();
+        expect(ui.parseBasicInstructions(null)).toBeNull();
+    });
+
+    it('loads the real prompt into Basic mode instead of showing an empty box', () => {
+        // The regression: showEditorView never populated the Basic textarea, so a
+        // populated Aspect showed a blank "What should this Aspect do?", and the
+        // first nudge of the tone slider overwrote its instructions with an
+        // empty CORE DIRECTIVE.
+        const aspect = {
+            id: '1', name: 'A', description: '', knowledge: '', tools: [],
+            instructions: ui.composeBasicInstructions('Be a careful reviewer', 2),
+            basicMode: true, background: '', icon: ''
+        };
+        aspectsModule.getCurrentAspect.mockReturnValue(aspect);
+
+        ui.toggleAdvancedMode(); // toggle is unchecked -> Basic
+
+        expect(document.getElementById('edit-basic-instructions').value).toBe('Be a careful reviewer');
+        expect(document.getElementById('edit-basic-tone').value).toBe('2');
+        expect(document.getElementById('tone-label').innerText).toBe('Casual');
+    });
+
+    it('touching the tone slider preserves the description instead of blanking it', () => {
+        const aspect = {
+            id: '1', name: 'A', description: '', knowledge: '', tools: [],
+            instructions: ui.composeBasicInstructions('Keep this text', 3),
+            basicMode: true, background: '', icon: ''
+        };
+        aspectsModule.getCurrentAspect.mockReturnValue(aspect);
+
+        ui.toggleAdvancedMode();          // hydrate Basic controls
+        document.getElementById('edit-basic-tone').value = '5';
+        ui.updateBasicInstructions();     // as the slider's input handler would
+
+        expect(aspectsModule.updateAspectData).toHaveBeenCalledWith(
+            'instructions',
+            expect.stringContaining('Keep this text')
+        );
+        expect(aspectsModule.updateAspectData).toHaveBeenCalledWith(
+            'instructions',
+            expect.stringContaining('Strictly Formal')
+        );
+    });
+
+    it('asks before flattening a custom prompt, and honours a cancel', () => {
+        const aspect = {
+            id: '1', name: 'A', description: '', knowledge: '', tools: [],
+            instructions: 'A carefully hand-written persona prompt.',
+            background: '', icon: ''
+        };
+        aspectsModule.getCurrentAspect.mockReturnValue(aspect);
+        const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+        const toggle = document.getElementById('advanced-mode-toggle');
+        toggle.checked = false;
+        ui.toggleAdvancedMode();
+
+        expect(confirmSpy).toHaveBeenCalled();
+        // Cancelling snaps the switch back to Advanced and changes nothing.
+        expect(toggle.checked).toBe(true);
+        expect(aspect.instructions).toBe('A carefully hand-written persona prompt.');
+        confirmSpy.mockRestore();
+    });
+
+    it('opens an Aspect with a custom prompt in Advanced mode by default', () => {
+        document.body.insertAdjacentHTML('beforeend', `
+            <div id="editor-view" class="hidden"></div>
+            <div id="chat-view"></div>
+            <input id="edit-name" /><textarea id="edit-desc"></textarea>
+            <textarea id="edit-knowledge"></textarea>
+            <img id="icon-preview" /><div id="icon-filename"></div>
+            <div id="tools-list"></div><div id="bg-filename"></div>
+            <div id="preset-bg-grid"></div><div id="knowledge-file-list"></div>
+        `);
+        aspectsModule.getCurrentAspect.mockReturnValue({
+            id: '1', name: 'A', description: '', knowledge: '', tools: [],
+            instructions: 'Totally custom prompt.', background: '', icon: ''
+        });
+
+        ui.showEditorView();
+
+        expect(document.getElementById('advanced-mode-toggle').checked).toBe(true);
+        expect(document.getElementById('advanced-config-area')).not.toHaveClass('hidden');
+    });
 });

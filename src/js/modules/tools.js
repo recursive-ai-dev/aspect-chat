@@ -1,16 +1,19 @@
 import { renderChatMessages, createStreamingBubble, updateStreamingBubble } from './chat.js';
 import { getKnowledgeFilesText, saveMemory } from './db.js';
-import { markChangesUnsaved, setChatLoadingState } from './ui.js';
-import { initWebLLMEngine } from './webllm.js';
+import { markChangesUnsaved, setChatLoadingState, renderConversationList } from './ui.js';
 import { getCurrentAspect } from './aspects.js';
-import { state } from './state.js';
-export function getApiEndpoint(apiUrl) {
-    let endpoint = apiUrl.trim();
-    if (!endpoint.endsWith('/chat/completions') && !endpoint.endsWith('/chat/completions/')) {
-        endpoint = endpoint.replace(/\/+$/, '') + '/chat/completions';
-    }
-    return endpoint;
-}
+import { state, getGenerationParams } from './state.js';
+import { touchActiveConversation } from './conversations.js';
+import {
+    streamChatWithFallback,
+    completeChat,
+    primaryTarget,
+    fallbackTarget,
+    readSSEStream
+} from './llm.js';
+import { getApiEndpoint, buildHeaders } from './providers.js';
+
+export { getApiEndpoint };
 
 export function buildSystemPrompt(aspect, extraFileText) {
     return `${aspect.instructions}
@@ -39,76 +42,37 @@ ${extraContext}` });
     return apiMessages;
 }
 
+/**
+ * Stream an OpenAI-style SSE body into a chat bubble.
+ *
+ * The bubble is created lazily on the first content chunk so a request that
+ * errors before producing any text never leaves an empty bubble behind.
+ * Kept as a thin wrapper over `readSSEStream` so the parsing lives in one place.
+ */
 export async function handleStreamResponse(reader, createStreamingBubble, updateStreamingBubble) {
-    const decoder = new TextDecoder('utf-8');
-    let aiMessage = "";
-    let isFirstChunk = true;
     let bubbleElement = null;
-    let pendingData = "";
 
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-            if (bubbleElement) updateStreamingBubble(bubbleElement, aiMessage);
-            break;
-        }
+    const aiMessage = await readSSEStream(reader, (_delta, full) => {
+        if (!bubbleElement) bubbleElement = createStreamingBubble();
+        updateStreamingBubble(bubbleElement, full);
+    });
 
-        const chunk = decoder.decode(value, { stream: true });
-        pendingData += chunk;
-        const lines = pendingData.split('\n');
-        pendingData = lines.pop();
-
-        for (let line of lines) {
-            const cleanLine = line.replace(/\r$/, '').trim();
-            if (cleanLine === '') continue;
-            if (cleanLine.startsWith('data:')) {
-                const dataStr = cleanLine.slice(5).trim();
-                if (dataStr === '[DONE]') continue;
-                try {
-                    const data = JSON.parse(dataStr);
-                    if (data.choices && data.choices[0].delta && data.choices[0].delta.content) {
-                        aiMessage += data.choices[0].delta.content;
-
-                        if (isFirstChunk) {
-                            bubbleElement = createStreamingBubble();
-                            isFirstChunk = false;
-                        }
-                        updateStreamingBubble(bubbleElement, aiMessage);
-                    }
-                } catch (e) {
-                    console.warn("Failed to parse SSE JSON chunk", e.message, dataStr);
-                }
-            }
-        }
-    }
-
-    // Flush any final SSE line that was not terminated by a newline
-    const finalLine = pendingData.replace(/\r$/, '').trim();
-    if (finalLine !== '') {
-        if (finalLine.startsWith('data:')) {
-            const dataStr = finalLine.slice(5).trim();
-            if (dataStr !== '[DONE]') {
-                try {
-                    const data = JSON.parse(dataStr);
-                    if (data.choices && data.choices[0].delta && data.choices[0].delta.content) {
-                        aiMessage += data.choices[0].delta.content;
-                        if (bubbleElement) updateStreamingBubble(bubbleElement, aiMessage);
-                    }
-                } catch (e) {
-                    console.warn("Failed to parse SSE JSON chunk", e.message, dataStr);
-                }
-            }
-        }
-    }
+    // Final unthrottled paint so the last tokens are never left unrendered.
+    if (bubbleElement) updateStreamingBubble(bubbleElement, aiMessage, true);
     return aiMessage;
 }
 
 
-
-
-
+        /**
+         * Ask another Aspect a one-shot question (the @mention / SummonAspect path).
+         *
+         * Non-streaming: there is no bubble to stream into, the answer is folded
+         * into the calling Aspect's context. Honours the fallback provider for
+         * the same reason the main chat path does.
+         */
         export async function fetchAIResponseForAspect(aspect, prompt) {
-            if (!state.settings.apiUrl || !state.settings.apiKey) {
+            const primary = primaryTarget(state.settings);
+            if (!primary.isWebLLM && !primary.url) {
                 throw new Error("API credentials not configured.");
             }
 
@@ -120,36 +84,15 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                 { role: 'user', content: prompt }
             ];
 
-            const endpoint = getApiEndpoint(state.settings.apiUrl);
+            const params = getGenerationParams(aspect);
 
-            const response = await fetch(endpoint, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${state.settings.apiKey}`
-                },
-                body: JSON.stringify({
-                    model: state.settings.model,
-                    messages: apiMessages,
-                    temperature: 0.7,
-                    stream: false // Non-streaming for summons
-                })
-            }).catch(err => {
-                throw new Error(`Network error: ${err.message}`);
-            });
-
-            if (!response.ok) {
-                const errData = await response.json().catch(() => ({}));
-                const errMsg = errData.error?.message || response.statusText;
-                throw new Error(`API error ${response.status}: ${errMsg}`);
+            try {
+                return await completeChat({ target: primary, messages: apiMessages, params });
+            } catch (err) {
+                const secondary = fallbackTarget(state.settings);
+                if (!secondary) throw err;
+                return completeChat({ target: secondary, messages: apiMessages, params });
             }
-
-            const data = await response.json().catch(() => ({}));
-            const content = data?.choices?.[0]?.message?.content;
-            if (content == null) {
-                throw new Error("Empty response from model.");
-            }
-            return content;
         }
 
         export async function executeJavaScriptTool(toolName, argStr) {
@@ -207,12 +150,17 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                         }
                     };
 
+                    // 10s was too short for tools that make network calls
+                    // (the FetchWebsite template routinely exceeded it).
+                    const timeoutMs = Number.isFinite(state.settings.toolTimeoutMs) && state.settings.toolTimeoutMs > 0
+                        ? state.settings.toolTimeoutMs
+                        : 30000;
                     timeoutId = setTimeout(() => {
                         worker.terminate();
                         URL.revokeObjectURL(workerUrl);
                         cleanup();
-                        reject(new Error("Tool execution timed out after 10 seconds."));
-                    }, 10000);
+                        reject(new Error(`Tool execution timed out after ${Math.round(timeoutMs / 1000)} seconds.`));
+                    }, timeoutMs);
 
                     onAbort = () => {
                         worker.terminate();
@@ -393,98 +341,86 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
             if (!aspect) return;
 
             setChatLoadingState(true);
+            state.isGenerating = true;
 
             const writingId = addSystemLog(`*${aspect.name} is reflecting...*`);
-            
+
             if (state.abortController) {
                 state.abortController.abort();
             }
             state.abortController = new AbortController();
+            const signal = state.abortController.signal;
+
+            // Remove the "reflecting" placeholder wherever we leave this function.
+            const dropPlaceholder = () => {
+                const idx = aspect.chatHistory.findIndex(m => m.id === writingId);
+                if (idx !== -1) aspect.chatHistory.splice(idx, 1);
+            };
 
             try {
-                if (!state.settings.apiUrl || !state.settings.apiKey) {
-                    throw new Error("API credentials not configured. Please click the Gear icon in the sidebar to configure them.");
-                }
-
                 const extraFileText = await getKnowledgeFilesText(aspect.id);
                 const systemPrompt = buildSystemPrompt(aspect, extraFileText);
                 const apiMessages = buildApiMessages(aspect, systemPrompt, extraContext, state.settings.maxContext);
+                const params = getGenerationParams(aspect);
 
-                const endpoint = getApiEndpoint(state.settings.apiUrl);
+                let bubbleElement = null;
+                let placeholderRemoved = false;
 
-
-                let response;
-                try {
-                    response = await fetch(endpoint, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${state.settings.apiKey}`
-                        },
-                        body: JSON.stringify({
-                            model: state.settings.model,
-                            messages: apiMessages,
-                            temperature: 0.7,
-                            stream: true
-                        }),
-                        signal: state.abortController.signal
-                    });
-                } catch (err) {
-                    if (err.name === 'AbortError') {
-                        throw err;
+                const aiMessage = await streamChatWithFallback({
+                    settings: state.settings,
+                    messages: apiMessages,
+                    params,
+                    signal,
+                    onDelta: (_delta, full) => {
+                        // Swap the placeholder for a real bubble the moment the
+                        // first token lands, so the two never show at once.
+                        if (!placeholderRemoved) {
+                            dropPlaceholder();
+                            placeholderRemoved = true;
+                            renderChatMessages();
+                        }
+                        if (!bubbleElement) bubbleElement = createStreamingBubble();
+                        updateStreamingBubble(bubbleElement, full);
+                    },
+                    onProgress: (report) => {
+                        // WebLLM reports weight-download progress before any token.
+                        if (report && report.text) {
+                            updateSystemLog(writingId, `*Loading local model — ${report.text}*`);
+                        }
+                    },
+                    onFallback: (reason, target) => {
+                        updateSystemLog(writingId, `⚠️ *Primary provider failed (${reason}). Falling back to ${target.label}…*`);
                     }
-                    const idx = aspect.chatHistory.findIndex(m => m.id === writingId);
-                    if (idx !== -1) {
-                        aspect.chatHistory.splice(idx, 1);
-                    }
-                    addSystemLog(`❌ **Error:** Network error: ${err.message}`);
-                    setChatLoadingState(false);
+                });
+
+                if (bubbleElement) updateStreamingBubble(bubbleElement, aiMessage, true);
+                if (!placeholderRemoved) {
+                    dropPlaceholder();
                     renderChatMessages();
-                    state.abortController = null;
-                    return;
-                }
-
-                if (!response.ok) {
-                    const errData = await response.json().catch(() => ({}));
-                    const errMsg = errData.error?.message || response.statusText;
-                    throw new Error(`API error ${response.status}: ${errMsg}`);
-                }
-                
-                const reader = response.body.getReader();
-
-                const idx = aspect.chatHistory.findIndex(m => m.id === writingId);
-                if (idx !== -1) {
-                    aspect.chatHistory.splice(idx, 1);
-                }
-                renderChatMessages();
-
-                let aiMessage = "";
-                try {
-                    aiMessage = await handleStreamResponse(reader, createStreamingBubble, updateStreamingBubble);
-                } catch (e) {
-                    if (e.name === 'AbortError') {
-                        addSystemLog(`⚠️ **Generation stopped by user.**`);
-                        renderChatMessages();
-                        return;
-                    }
-                    throw e;
                 }
 
                 await processAIResponseAndTools(aiMessage, aspect);
 
             } catch (error) {
-                const idx = aspect.chatHistory.findIndex(m => m.id === writingId);
-                if (idx !== -1) {
-                    aspect.chatHistory.splice(idx, 1);
+                dropPlaceholder();
+                if (error.name === 'AbortError' || signal.aborted) {
+                    addSystemLog('⚠️ **Generation stopped by user.**');
+                } else {
+                    addSystemLog(`❌ **Error:** ${error.message}`);
                 }
-                addSystemLog(`❌ **Error:** ${error.message}`);
             } finally {
+                state.isGenerating = false;
                 setChatLoadingState(false);
                 renderChatMessages();
                 state.abortController = null;
+                touchActiveConversation(aspect);
+                // The conversation's auto-title is derived from its first
+                // message, so the sidebar has to repaint once the exchange
+                // is complete or it keeps showing "New chat".
+                renderConversationList();
+                markChangesUnsaved();
             }
         }
-
 
         export async function sendMessage() {
             const input = document.getElementById('chat-input');
@@ -535,6 +471,7 @@ ${response}`);
             aspect.chatHistory.push({ role: 'user', content: text });
             input.value = '';
             input.style.height = 'auto'; // Reset textarea height
+            touchActiveConversation(aspect);
             renderChatMessages();
             markChangesUnsaved();
 
@@ -566,11 +503,16 @@ ${response}`);
             await sendAIRequest(userToolResults);
         }
 
-        // Close dropdown if clicking outside
-        window.onclick = function(event) {
-            if (!event.target.matches('#tools-btn')) {
-                document.getElementById('tools-dropdown').classList.remove('show');
-            }
+        // Close the tools dropdown when clicking elsewhere.
+        // Uses addEventListener rather than window.onclick, which would replace
+        // (and be replaced by) any other module's window-level click handler.
+        if (typeof window !== 'undefined') {
+            window.addEventListener('click', function(event) {
+                if (!event.target.matches('#tools-btn')) {
+                    const dropdown = document.getElementById('tools-dropdown');
+                    if (dropdown) dropdown.classList.remove('show');
+                }
+            });
         }
 
         // Start app is now handled in main.js

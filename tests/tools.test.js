@@ -18,7 +18,8 @@ vi.mock('../src/js/modules/ui.js', () => ({
     markChangesUnsaved: vi.fn(),
     setChatLoadingState: vi.fn(),
     addSystemLog: vi.fn(),
-    updateSystemLog: vi.fn()
+    updateSystemLog: vi.fn(),
+    renderConversationList: vi.fn()
 }));
 
 vi.mock('../src/js/modules/chat.js', () => ({
@@ -92,7 +93,7 @@ describe('Tools Module', () => {
                 })
             );
             const aspect = { id: '1', instructions: 'Be helpful' };
-            await expect(tools.fetchAIResponseForAspect(aspect, 'Hello')).rejects.toThrow('API error 401: Invalid token');
+            await expect(tools.fetchAIResponseForAspect(aspect, 'Hello')).rejects.toThrow('Unauthorized (401). Invalid token');
         });
 
         it('should throw on empty choices array', async () => {
@@ -296,7 +297,7 @@ describe('Tools Module', () => {
             ];
             state.currentAspectId = 'current';
             aspectsModule.getCurrentAspect.mockReturnValue(aspect);
-            state.settings = { apiUrl: 'https://api.test.com', apiKey: 'test' };
+            state.settings = { apiUrl: 'https://api.test.com', apiKey: 'test', model: 'test-model' };
             server.use(
                 http.post('https://api.test.com/chat/completions', () => {
                     return HttpResponse.error();
@@ -316,7 +317,7 @@ describe('Tools Module', () => {
         it('should handle AbortError during stream', async () => {
             const aspect = { chatHistory: [] };
             aspectsModule.getCurrentAspect.mockReturnValue(aspect);
-            state.settings = { apiUrl: 'https://api.test.com', apiKey: 'test' };
+            state.settings = { apiUrl: 'https://api.test.com', apiKey: 'test', model: 'test-model' };
             
             // Note: sendAIRequest accesses state.abortController
             state.abortController = new AbortController();
@@ -350,7 +351,7 @@ describe('Tools Module', () => {
         it('should ignore partial JSON in handleStreamResponse', async () => {
             const aspect = { chatHistory: [] };
             aspectsModule.getCurrentAspect.mockReturnValue(aspect);
-            state.settings = { apiUrl: 'https://api.test.com', apiKey: 'test' };
+            state.settings = { apiUrl: 'https://api.test.com', apiKey: 'test', model: 'test-model' };
             global.fetch = vi.fn().mockResolvedValue({
                 ok: true,
                 body: {
@@ -378,7 +379,7 @@ describe('Tools Module', () => {
         it('should include a final SSE line that lacks a trailing newline', async () => {
             const aspect = { chatHistory: [] };
             aspectsModule.getCurrentAspect.mockReturnValue(aspect);
-            state.settings = { apiUrl: 'https://api.test.com', apiKey: 'test' };
+            state.settings = { apiUrl: 'https://api.test.com', apiKey: 'test', model: 'test-model' };
             global.fetch = vi.fn().mockResolvedValue({
                 ok: true,
                 body: {
@@ -411,23 +412,28 @@ describe('Tools Module', () => {
         });
     });
 
-    describe('window.onclick', () => {
+    describe('tools dropdown outside-click handler', () => {
         it('should close tools dropdown when clicking outside', () => {
             document.body.innerHTML = `
                 <button id="tools-btn">Tools</button>
                 <div id="tools-dropdown" class="show"></div>
                 <div id="outside"></div>
             `;
-            
-            expect(document.getElementById('tools-dropdown').classList.contains('show')).toBe(true);
-            
-            // Trigger click on tools-btn (should not remove 'show')
-            window.onclick({ target: { matches: (s) => s === '#tools-btn' } });
-            expect(document.getElementById('tools-dropdown').classList.contains('show')).toBe(true);
 
-            // Trigger click on outside (should remove 'show')
-            window.onclick({ target: { matches: () => false } });
-            expect(document.getElementById('tools-dropdown').classList.contains('show')).toBe(false);
+            const dropdown = () => document.getElementById('tools-dropdown');
+            expect(dropdown().classList.contains('show')).toBe(true);
+
+            // Clicking the Tools button itself must leave the menu open.
+            document.getElementById('tools-btn').dispatchEvent(
+                new MouseEvent('click', { bubbles: true })
+            );
+            expect(dropdown().classList.contains('show')).toBe(true);
+
+            // Clicking anywhere else closes it.
+            document.getElementById('outside').dispatchEvent(
+                new MouseEvent('click', { bubbles: true })
+            );
+            expect(dropdown().classList.contains('show')).toBe(false);
         });
     });
 });

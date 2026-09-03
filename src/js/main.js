@@ -1,110 +1,333 @@
-import { toggleAdvancedMode, updateBasicInstructions } from './modules/ui.js';
-import './modules/workflowBuilder.js';
-import { state } from './modules/state.js';
-window.state = state;
-import { saveKnowledgeFile } from './modules/db.js';
-import { acceptCreateAspect } from './modules/aspects.js';
-import { loadAspectFile } from './modules/zip.js';
-import { getLakesideSageIcon } from './modules/aspects.js';
-import { sendAIRequest } from './modules/tools.js';
-import { saveAspectToFile, exportAspectToWebpage } from './modules/zip.js';
-import { updateAspectData } from './modules/aspects.js';
-import { uploadKnowledgeFiles } from './modules/db.js';
-import { getKnowledgeFilesText } from './modules/db.js';
-import { showEditorView } from './modules/ui.js';
-import { addSystemLog } from './modules/tools.js';
-import { loadDefaultAspects } from './modules/aspects.js';
-import { openSettings } from './modules/settings.js';
-import { executeJavaScriptTool } from './modules/tools.js';
-import { renderPresetBgGrid } from './modules/ui.js';
-import { markChangesUnsaved } from './modules/ui.js';
-import { applyAspectBackground } from './modules/ui.js';
-import { markChangesSaved } from './modules/state.js';
-import { renderAspectList } from './modules/aspects.js';
-import { selectPresetBackground } from './modules/ui.js';
-import { saveSettings } from './modules/settings.js';
-import { toggleToolsDropdown } from './modules/chat.js';
-import { onModelSelectDropdown } from './modules/settings.js';
-import { initToolEditor } from './modules/toolEditor.js';
-import { showChatView } from './modules/ui.js';
-import { processAIResponseAndTools } from './modules/tools.js';
-import { getGenericIcon } from './modules/aspects.js';
-import { onProviderSelect } from './modules/settings.js';
-import { init } from './modules/init.js';
-import { fetchModelsIfPossible } from './modules/settings.js';
-import { createNewAspect } from './modules/aspects.js';
-import { uploadTools } from './modules/ui.js';
-import { deleteCurrentAspect } from './modules/aspects.js';
-import { uploadIcon } from './modules/ui.js';
-import { saveAspectsToLocalStorage } from './modules/state.js';
-import { uploadCreateIcon } from './modules/aspects.js';
-import { updateSystemLog } from './modules/tools.js';
-import { cancelCreateAspect } from './modules/aspects.js';
-import { selectAspect } from './modules/aspects.js';
-import { escapeHtml } from './modules/chat.js';
-import { sendMessage } from './modules/tools.js';
-import { renderChatMessages } from './modules/chat.js';
-import { insertToolTag } from './modules/tools.js';
-import { uploadBackground } from './modules/ui.js';
-import { getCurrentAspect } from './modules/aspects.js';
-import { editMessage, deleteMessage, regenerateMessage } from './modules/chat.js';
-import { abortAIRequest } from './modules/tools.js';
-import { openSystemToolsModal } from './modules/ui.js';
+/**
+ * Application entry point.
+ *
+ * Wiring is done here with event delegation on `data-action` attributes rather
+ * than inline `onclick=` handlers in the HTML. The old approach required every
+ * handler to be published on `window` and silently broke whenever a name was
+ * missing — which is exactly how the settings modal ended up with a Fallback
+ * Provider section calling functions that did not exist.
+ */
 
-window.getLakesideSageIcon = getLakesideSageIcon;
-window.loadDefaultAspects = loadDefaultAspects;
-window.getGenericIcon = getGenericIcon;
-window.createNewAspect = createNewAspect;
-window.uploadCreateIcon = uploadCreateIcon;
-window.acceptCreateAspect = acceptCreateAspect;
-window.cancelCreateAspect = cancelCreateAspect;
-window.selectAspect = selectAspect;
-window.getCurrentAspect = getCurrentAspect;
-window.updateAspectData = updateAspectData;
-window.deleteCurrentAspect = deleteCurrentAspect;
-window.renderAspectList = renderAspectList;
-window.escapeHtml = escapeHtml;
-window.renderChatMessages = renderChatMessages;
-window.editMessage = editMessage;
-window.deleteMessage = deleteMessage;
-window.regenerateMessage = regenerateMessage;
-window.abortAIRequest = abortAIRequest;
-window.toggleToolsDropdown = toggleToolsDropdown;
-window.init = init;
-window.openSettings = openSettings;
-window.saveSettings = saveSettings;
-window.onProviderSelect = onProviderSelect;
-window.onModelSelectDropdown = onModelSelectDropdown;
-window.saveAspectsToLocalStorage = saveAspectsToLocalStorage;
-window.markChangesSaved = markChangesSaved;
-window.insertToolTag = insertToolTag;
-window.addSystemLog = addSystemLog;
-window.updateSystemLog = updateSystemLog;
-window.markChangesUnsaved = markChangesUnsaved;
-window.showEditorView = showEditorView;
-window.showChatView = showChatView;
-window.uploadIcon = uploadIcon;
-window.uploadTools = uploadTools;
-window.applyAspectBackground = applyAspectBackground;
-window.renderPresetBgGrid = renderPresetBgGrid;
-window.selectPresetBackground = selectPresetBackground;
-window.uploadBackground = uploadBackground;
-window.saveKnowledgeFile = saveKnowledgeFile;
-window.getKnowledgeFilesText = getKnowledgeFilesText;
-window.uploadKnowledgeFiles = uploadKnowledgeFiles;
-window.fetchModelsIfPossible = fetchModelsIfPossible;
-window.executeJavaScriptTool = executeJavaScriptTool;
-window.processAIResponseAndTools = processAIResponseAndTools;
-window.sendAIRequest = sendAIRequest;
-window.sendMessage = sendMessage;
-window.saveAspectToFile = saveAspectToFile;
-window.exportAspectToWebpage = exportAspectToWebpage;
-window.loadAspectFile = loadAspectFile;
-window.openSystemToolsModal = openSystemToolsModal;
+import './modules/workflowBuilder.js';
+
+import { state, flushAspects, persistAspects } from './modules/state.js';
+import { init } from './modules/init.js';
+import { initToolEditor, openToolEditor, closeToolEditor, saveToolCode } from './modules/toolEditor.js';
+
+import {
+    loadDefaultAspects,
+    createNewAspect,
+    acceptCreateAspect,
+    acceptCreateAspectFromTemplate,
+    cancelCreateAspect,
+    selectAspect,
+    getCurrentAspect,
+    updateAspectData,
+    deleteCurrentAspect,
+    renderAspectList,
+    uploadCreateIcon,
+    getGenericIcon,
+    getLakesideSageIcon,
+    normalizeAspect
+} from './modules/aspects.js';
+
+import {
+    showEditorView,
+    showChatView,
+    uploadIcon,
+    uploadTools,
+    uploadBackground,
+    applyAspectBackground,
+    renderPresetBgGrid,
+    selectPresetBackground,
+    openSystemToolsModal,
+    markChangesUnsaved,
+    dismissSaveReminder,
+    toggleAdvancedMode,
+    updateBasicInstructions,
+    updateGenerationParam,
+    updateModelBadge,
+    newConversation,
+    renderConversationList,
+    renderKnowledgeFileList,
+    showToast
+} from './modules/ui.js';
+
+import {
+    openSettings,
+    saveSettings,
+    onProviderSelect,
+    onModelSelectDropdown,
+    onFallbackProviderSelect,
+    onFallbackModelSelectDropdown,
+    fetchModelsIfPossible,
+    fetchFallbackModels,
+    testPrimaryConnection,
+    testFallbackConnection
+} from './modules/settings.js';
+
+import {
+    sendMessage,
+    sendAIRequest,
+    abortAIRequest,
+    insertToolTag,
+    addSystemLog,
+    updateSystemLog,
+    executeJavaScriptTool,
+    processAIResponseAndTools
+} from './modules/tools.js';
+
+import {
+    renderChatMessages,
+    escapeHtml,
+    editMessage,
+    deleteMessage,
+    regenerateMessage,
+    copyMessage,
+    toggleToolsDropdown
+} from './modules/chat.js';
+
+import { saveAspectToFile, exportAspectToWebpage, loadAspectFile } from './modules/zip.js';
+import { saveKnowledgeFile, getKnowledgeFilesText, uploadKnowledgeFiles } from './modules/db.js';
+
+/* ------------------------------------------------------------------ *
+ * Globals
+ *
+ * Kept for the workflow builder, the tool editor and anyone poking at the
+ * app from the console. The UI itself no longer depends on them.
+ * ------------------------------------------------------------------ */
+
+Object.assign(window, {
+    state,
+    getCurrentAspect,
+    getGenericIcon,
+    getLakesideSageIcon,
+    normalizeAspect,
+    selectAspect,
+    updateAspectData,
+    renderAspectList,
+    renderChatMessages,
+    renderConversationList,
+    renderKnowledgeFileList,
+    updateModelBadge,
+    escapeHtml,
+    editMessage,
+    deleteMessage,
+    regenerateMessage,
+    copyMessage,
+    insertToolTag,
+    addSystemLog,
+    updateSystemLog,
+    markChangesUnsaved,
+    showEditorView,
+    showChatView,
+    executeJavaScriptTool,
+    processAIResponseAndTools,
+    sendAIRequest,
+    sendMessage,
+    saveAspectToFile,
+    exportAspectToWebpage,
+    loadAspectFile,
+    saveKnowledgeFile,
+    getKnowledgeFilesText,
+    openSettings,
+    saveSettings,
+    openToolEditor,
+    closeToolEditor,
+    saveToolCode,
+    openSystemToolsModal,
+    showToast,
+    acceptCreateAspect,
+    acceptCreateAspectFromTemplate,
+    uploadCreateIcon,
+    cancelCreateAspect
+});
+
+/* ------------------------------------------------------------------ *
+ * Declarative wiring
+ * ------------------------------------------------------------------ */
+
+const click = (id) => document.getElementById(id)?.click();
+
+/** Click handlers, keyed by the element's `data-action` value. */
+const ACTIONS = {
+    'open-settings': openSettings,
+    'save-settings': saveSettings,
+    'close-settings': () => document.getElementById('settings-modal').classList.add('hidden'),
+    'test-connection': testPrimaryConnection,
+    'test-fallback': testFallbackConnection,
+    'refresh-models': fetchModelsIfPossible,
+
+    'upload-aspect': () => click('upload-aspect-input'),
+    'save-aspect': saveAspectToFile,
+    'dismiss-save-reminder': dismissSaveReminder,
+    'export-webpage': exportAspectToWebpage,
+    'delete-aspect': deleteCurrentAspect,
+
+    'show-editor': showEditorView,
+    'show-chat': showChatView,
+
+    'upload-background': () => click('upload-bg-input'),
+    'upload-knowledge': () => click('upload-knowledge-input'),
+    'upload-tools': () => click('upload-tools-input'),
+
+    'open-system-tools': openSystemToolsModal,
+    'close-system-tools': () => document.getElementById('system-tools-modal').classList.add('hidden'),
+    'new-tool': () => openToolEditor(),
+    'close-tool-editor': closeToolEditor,
+    'save-tool': saveToolCode,
+
+    'open-workflow': () => window.openWorkflowModal(),
+    'close-workflow': () => window.closeWorkflowModal(),
+    'save-workflow': () => window.saveWorkflowAsTool(),
+
+    'cancel-create': cancelCreateAspect,
+    'new-conversation': newConversation,
+
+    'send': sendMessage,
+    'stop': abortAIRequest
+};
+
+function wireDelegatedClicks() {
+    document.addEventListener('click', (event) => {
+        const trigger = event.target.closest('[data-action]');
+        if (trigger) {
+            const handler = ACTIONS[trigger.dataset.action];
+            if (handler) {
+                event.preventDefault();
+                Promise.resolve(handler()).catch(err => {
+                    console.error(`Action "${trigger.dataset.action}" failed`, err);
+                    showToast(err.message || 'Something went wrong.', 'error');
+                });
+            }
+            return;
+        }
+
+        const nodeButton = event.target.closest('[data-workflow-node]');
+        if (nodeButton) {
+            window.addWorkflowNode(nodeButton.dataset.workflowNode);
+        }
+    });
+}
+
+/** Bind a listener only when the element exists, so partial DOMs stay safe. */
+function on(id, eventName, handler) {
+    const node = document.getElementById(id);
+    if (node) node.addEventListener(eventName, handler);
+}
+
+function wireInputs() {
+    // --- Settings
+    on('api-provider-select', 'change', onProviderSelect);
+    on('api-url-input', 'input', fetchModelsIfPossible);
+    on('api-key-input', 'input', fetchModelsIfPossible);
+    on('api-model-select', 'change', onModelSelectDropdown);
+    on('api-model-input', 'input', updateModelBadge);
+    on('fallback-provider-select', 'change', onFallbackProviderSelect);
+    on('fallback-url-input', 'input', fetchFallbackModels);
+    on('fallback-key-input', 'input', fetchFallbackModels);
+    on('fallback-model-select', 'change', onFallbackModelSelectDropdown);
+
+    // --- Editor
+    on('edit-name', 'input', (e) => updateAspectData('name', e.target.value));
+    on('edit-desc', 'input', (e) => updateAspectData('description', e.target.value));
+    on('edit-instructions', 'input', (e) => updateAspectData('instructions', e.target.value));
+    on('edit-knowledge', 'input', (e) => updateAspectData('knowledge', e.target.value));
+    on('edit-basic-instructions', 'input', updateBasicInstructions);
+    on('edit-basic-tone', 'input', updateBasicInstructions);
+    on('advanced-mode-toggle', 'change', toggleAdvancedMode);
+
+    on('edit-temperature', 'input', (e) => updateGenerationParam('temperature', e.target.value));
+    on('edit-top-p', 'input', (e) => updateGenerationParam('topP', e.target.value));
+    on('edit-max-tokens', 'input', (e) => updateGenerationParam('maxTokens', e.target.value));
+
+    // --- File inputs
+    on('upload-aspect-input', 'change', loadAspectFile);
+    on('upload-icon-input', 'change', uploadIcon);
+    on('upload-bg-input', 'change', uploadBackground);
+    on('upload-knowledge-input', 'change', uploadKnowledgeFiles);
+    on('upload-tools-input', 'change', uploadTools);
+
+    // --- Chat
+    on('tools-btn', 'click', toggleToolsDropdown);
+    on('chat-input', 'keydown', (event) => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            sendMessage();
+        }
+    });
+
+    // --- Dark mode switch reflects immediately, not only on save.
+    on('dark-mode-toggle', 'change', (e) => {
+        document.body.classList.toggle('dark-theme', e.target.checked);
+    });
+}
+
+/**
+ * Keyboard shortcuts for the things done dozens of times a day.
+ * Ctrl/Cmd based so they never collide with typing.
+ */
+function wireShortcuts() {
+    document.addEventListener('keydown', (event) => {
+        const mod = event.ctrlKey || event.metaKey;
+        if (!mod) return;
+
+        switch (event.key.toLowerCase()) {
+            case 'k': // new chat
+                event.preventDefault();
+                newConversation();
+                break;
+            case 's': // export the current Aspect
+                event.preventDefault();
+                saveAspectToFile();
+                break;
+            case ',': // settings, matching the platform convention
+                event.preventDefault();
+                openSettings();
+                break;
+            case 'e': // jump between chat and editor
+                event.preventDefault();
+                if (document.getElementById('editor-view').classList.contains('hidden')) {
+                    showEditorView();
+                } else {
+                    showChatView();
+                }
+                break;
+            default:
+                break;
+        }
+    });
+}
+
+/**
+ * Aspect writes are debounced, so a tab closed immediately after typing could
+ * lose the last few hundred milliseconds of edits. Flush on the events that
+ * actually fire reliably before teardown.
+ */
+function wirePersistenceFlush() {
+    const flush = () => { flushAspects().catch(err => console.error('Final save failed', err)); };
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') flush();
+    });
+    window.addEventListener('pagehide', flush);
+    window.addEventListener('beforeunload', flush);
+}
 
 document.addEventListener('DOMContentLoaded', async () => {
-    await init();
+    wireDelegatedClicks();
+    wireInputs();
+    wireShortcuts();
+    wirePersistenceFlush();
+
     initToolEditor();
+
+    try {
+        await init();
+    } catch (err) {
+        console.error('Aspect Studio failed to start', err);
+        showToast(`Aspect Studio failed to start: ${err.message}`, 'error');
+    }
 });
-window.toggleAdvancedMode = toggleAdvancedMode;
-window.updateBasicInstructions = updateBasicInstructions;
+
+export { persistAspects, loadDefaultAspects, createNewAspect, applyAspectBackground, renderPresetBgGrid, selectPresetBackground };
