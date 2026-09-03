@@ -73,5 +73,9 @@ release.
   - The exported card now full-entity-escapes every interpolated field, validates the icon is a `data:image/…;base64,` URI before using it as `src`, and carries its own restrictive `Content-Security-Policy` meta.
   - The built app ships a `Content-Security-Policy` meta (injected by a build-only Vite plugin): `default-src 'self'`, `worker-src 'self' blob:`, `script-src 'self' 'wasm-unsafe-eval' blob:`, `object-src 'none'`, `base-uri 'self'`. `connect-src` stays `*` because the endpoint is user-configured; the dev server is unaffected.
 
+### 10. [BY DESIGN] Icon Generation Calls pollinations.ai
+- **Location:** `src/js/modules/imagegen.js`, wired from the editor's "Generate icon" button.
+- **Analysis:** this is the only outbound request the app makes that is not a chat completion to the user's own configured endpoint. It fires only on an explicit click, hits `https://image.pollinations.ai` (a free, keyless text-to-image service), and the description sent is whatever the user typed (defaulting to the Aspect's name/description). The result is fetched and inlined as a `data:` URI, so the stored Aspect never depends on an external URL. Covered by `connect-src *` in the app CSP (which is already open because the model endpoint is user-configured). Users who want zero third-party contact simply never press the button.
+
 ---
 *Last reviewed as part of the daily-driver hardening pass. Re-run this review if the workflow builder gains an import feature, or if any user-supplied HTML is added to the DOM without sanitization.*

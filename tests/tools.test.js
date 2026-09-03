@@ -185,6 +185,24 @@ describe('Tools Module', () => {
             expect(aspectsModule.getCurrentAspect).not.toHaveBeenCalled();
         });
 
+        it('opens Settings and keeps the text when no provider is configured', async () => {
+            state.settings = { provider: 'custom', apiUrl: '', apiKey: '', model: '' };
+            const aspect = { chatHistory: [] };
+            aspectsModule.getCurrentAspect.mockReturnValue(aspect);
+            const openSettings = vi.fn();
+            window.openSettings = openSettings;
+
+            const input = document.getElementById('chat-input');
+            input.value = 'hello there';
+            await tools.sendMessage();
+
+            expect(openSettings).toHaveBeenCalled();
+            expect(input.value).toBe('hello there'); // not consumed
+            expect(aspect.chatHistory).toHaveLength(0);
+
+            delete window.openSettings;
+        });
+
         it('should summon another aspect if @AspectName is used', async () => {
             const aspect = { chatHistory: [] };
             state.aspects = [

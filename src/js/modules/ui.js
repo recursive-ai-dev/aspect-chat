@@ -2,6 +2,7 @@ import { insertToolTag } from './tools.js';
 import { renderChatMessages } from './chat.js';
 import { getGenericIcon, renderAspectList, getCurrentAspect, updateAspectData, loadDefaultAspects } from './aspects.js';
 import { armPersistence } from './persist.js';
+import { generateIcon } from './imagegen.js';
 import { persistAspects, DEFAULT_PARAMS, getGenerationParams } from './state.js';
 import { systemTools } from './systemTools.js';
 import { state } from './state.js';
@@ -400,6 +401,11 @@ export function showEditorView() {
     document.getElementById('icon-preview').src = aspect.icon || getGenericIcon();
     document.getElementById('icon-filename').innerText = aspect.icon ? 'Custom icon loaded' : 'No icon uploaded';
 
+    const iconGenPrompt = document.getElementById('icon-gen-prompt');
+    if (iconGenPrompt && !iconGenPrompt.value.trim()) {
+        iconGenPrompt.value = aspect.description || aspect.name || '';
+    }
+
     // Restore the editor mode this Aspect was last edited in. An Aspect whose
     // prompt Basic mode cannot represent opens in Advanced, so the real prompt
     // is always what is on screen.
@@ -689,6 +695,46 @@ export function uploadIcon(event) {
     reader.onerror = () => showToast(`Could not read ${file.name}.`, 'error');
     reader.readAsDataURL(file);
     event.target.value = '';
+}
+
+let iconGenBusy = false;
+
+/**
+ * Generate an Aspect icon from a text description via pollinations.ai.
+ * Each click uses a fresh random seed, so re-clicking gives a new take.
+ */
+export async function generateAspectIcon() {
+    if (iconGenBusy) return;
+    const aspect = getCurrentAspect();
+    if (!aspect) return;
+
+    const promptInput = document.getElementById('icon-gen-prompt');
+    const btn = document.getElementById('generate-icon-btn');
+    const description = (promptInput && promptInput.value.trim())
+        || aspect.description
+        || aspect.name;
+
+    iconGenBusy = true;
+    const label = btn ? btn.innerText : '';
+    if (btn) { btn.disabled = true; btn.innerText = 'Generating…'; }
+    showToast('Generating an icon… this can take a few seconds.');
+
+    try {
+        const dataUri = await generateIcon(description);
+        aspect.icon = dataUri;
+        const preview = document.getElementById('icon-preview');
+        if (preview) preview.src = dataUri;
+        const fname = document.getElementById('icon-filename');
+        if (fname) fname.innerText = 'Generated icon';
+        renderAspectList();
+        markChangesUnsaved();
+        showToast('Icon generated. Click again for a different take.');
+    } catch (err) {
+        showToast(err.message || 'Icon generation failed.', 'error');
+    } finally {
+        iconGenBusy = false;
+        if (btn) { btn.disabled = false; btn.innerText = label || '✨ Generate icon'; }
+    }
 }
 
 export function uploadTools(event) {

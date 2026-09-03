@@ -58,8 +58,11 @@ import {
     newConversation,
     renderConversationList,
     renderKnowledgeFileList,
+    generateAspectIcon,
     showToast
 } from './modules/ui.js';
+
+import { applyTheme } from './modules/themes.js';
 
 import {
     openSettings,
@@ -196,6 +199,7 @@ const ACTIONS = {
     'stop': abortAIRequest,
 
     'trust-tools': trustAspectTools,
+    'generate-icon': generateAspectIcon,
 
     // Storage-error overlay
     'storage-retry': () => location.reload(),
@@ -318,10 +322,8 @@ function wireInputs() {
         }
     });
 
-    // --- Dark mode switch reflects immediately, not only on save.
-    on('dark-mode-toggle', 'change', (e) => {
-        document.body.classList.toggle('dark-theme', e.target.checked);
-    });
+    // --- Theme reflects immediately, not only on save.
+    on('theme-select', 'change', (e) => applyTheme(e.target.value));
 }
 
 /**

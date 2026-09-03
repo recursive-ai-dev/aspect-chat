@@ -145,6 +145,17 @@ export function validateTarget(target) {
 }
 
 /**
+ * True when the current settings could plausibly satisfy a request — i.e. the
+ * primary target validates, or a configured fallback does. Used to send a user
+ * who has not set anything up straight to Settings instead of a dead-end error.
+ */
+export function hasUsableProvider(settings) {
+    if (!validateTarget(primaryTarget(settings))) return true;
+    const fb = fallbackTarget(settings);
+    return !!fb && !validateTarget(fb);
+}
+
+/**
  * Stream a chat completion from a single target.
  *
  * @returns {Promise<string>} the complete assistant message.

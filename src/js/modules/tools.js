@@ -9,6 +9,7 @@ import {
     completeChat,
     primaryTarget,
     fallbackTarget,
+    hasUsableProvider,
     readSSEStream
 } from './llm.js';
 import { getApiEndpoint, buildHeaders } from './providers.js';
@@ -521,6 +522,18 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
             if (state.isGenerating) {
                 if (typeof window !== 'undefined' && window.showToast) {
                     window.showToast('Wait for the current response to finish, or press Stop.', 'error');
+                }
+                return;
+            }
+
+            // No provider configured yet — open Settings instead of letting the
+            // request fail into an error bubble. The message stays in the box.
+            if (!hasUsableProvider(state.settings)) {
+                if (typeof window !== 'undefined' && window.showToast) {
+                    window.showToast('Choose a provider and model to start chatting.', 'error');
+                }
+                if (typeof window !== 'undefined' && typeof window.openSettings === 'function') {
+                    window.openSettings();
                 }
                 return;
             }

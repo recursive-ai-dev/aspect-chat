@@ -117,14 +117,8 @@
                 </div>
                 <p class="field-hint">Stored in this browser's local storage so you are not asked for it on every reload. Turn off to keep it only for the current tab.</p>
 
-                <div class="settings-toggle-row">
-                    <label for="dark-mode-toggle">Dark mode</label>
-                    <label class="switch">
-                        <input type="checkbox" id="dark-mode-toggle">
-                        <span class="switch-track"></span>
-                        <span class="switch-thumb"></span>
-                    </label>
-                </div>
+                <label for="theme-select">Theme</label>
+                <select id="theme-select"></select>
 
                 <hr class="settings-divider">
 
@@ -267,6 +261,11 @@
                                 <div class="file-list" id="icon-filename">No icon uploaded</div>
                             </div>
                         </div>
+                        <div class="icon-gen-row">
+                            <input type="text" id="icon-gen-prompt" placeholder="Describe an icon… e.g. 'a wise owl at dusk'" autocomplete="off">
+                            <button type="button" id="generate-icon-btn" class="settings-btn" data-action="generate-icon">✨ Generate icon</button>
+                        </div>
+                        <p class="field-hint">Generates via <strong>pollinations.ai</strong> (a free image service) and saves the result into the Aspect. This is the only outbound call the app makes that isn't to your own model endpoint.</p>
                     </div>
 
                     <div class="editor-field">

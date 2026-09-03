@@ -12,6 +12,7 @@ import {
     primaryTarget,
     fallbackTarget,
     validateTarget,
+    hasUsableProvider,
     streamChat,
     completeChat,
     streamChatWithFallback
@@ -147,6 +148,31 @@ describe('validateTarget', () => {
     it('rejects a missing endpoint', () => {
         expect(validateTarget({ url: '', key: '', model: 'm' })).toContain('not configured');
         expect(validateTarget(null)).toContain('No provider configured');
+    });
+});
+
+describe('hasUsableProvider', () => {
+    it('is false for an unconfigured app', () => {
+        expect(hasUsableProvider({ provider: 'custom', apiUrl: '', apiKey: '', model: '' })).toBe(false);
+    });
+
+    it('is true once a local server is set', () => {
+        expect(hasUsableProvider({
+            provider: 'custom', apiUrl: 'http://localhost:11434/v1', apiKey: '', model: 'llama3.1:8b'
+        })).toBe(true);
+    });
+
+    it('is true when only the fallback is usable', () => {
+        expect(hasUsableProvider({
+            provider: 'custom', apiUrl: '', apiKey: '', model: '',
+            fallbackProvider: 'webllm', fallbackModel: 'Phi-3-mini-4k-instruct-q4f16_1-MLC'
+        })).toBe(true);
+    });
+
+    it('is false when a hosted primary has no key and there is no fallback', () => {
+        expect(hasUsableProvider({
+            provider: 'custom', apiUrl: 'https://api.openai.com/v1', apiKey: '', model: 'gpt-4o'
+        })).toBe(false);
     });
 });
 

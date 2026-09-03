@@ -72,6 +72,103 @@ body.dark-theme {
     --code-fg: #e8e2d6;
 }
 
+/* ---------------------------------------------------------------- *
+ * Extra themes — palette overrides only. Defined after `dark-theme`
+ * so dark variants (which carry both classes) win.
+ * ---------------------------------------------------------------- */
+
+/* Slate — cool neutral light */
+body.theme-slate {
+    --bg-main: #eceef1;
+    --bg-panel: rgba(255, 255, 255, 0.6);
+    --bg-panel-solid: #ffffff;
+    --bg-input: rgba(255, 255, 255, 0.7);
+    --bg-scrollbar-track: #dce0e5;
+
+    --accent-primary: #3f6f8f;
+    --accent-primary-dark: #2d5470;
+    --accent-secondary: #d0805a;
+    --accent-secondary-dark: #b0653f;
+
+    --text-main: #23303a;
+    --text-light: #5c6b76;
+    --text-on-accent: #ffffff;
+
+    --border-color: #23303a;
+    --warn-bg: #fdf1cf;
+    --warn-text: #7a5a12;
+    --code-bg: #1f2933;
+    --code-fg: #eef2f5;
+}
+
+/* Sepia — warm high-contrast paper */
+body.theme-sepia {
+    --bg-main: #f1e3c9;
+    --bg-panel: rgba(255, 249, 235, 0.62);
+    --bg-panel-solid: #fbf3e2;
+    --bg-input: rgba(255, 252, 244, 0.7);
+    --bg-scrollbar-track: #e2d2b0;
+
+    --accent-primary: #8a5a2b;
+    --accent-primary-dark: #6d451f;
+    --accent-secondary: #a8402e;
+    --accent-secondary-dark: #872f20;
+
+    --text-main: #2e2213;
+    --text-light: #6b5636;
+    --text-on-accent: #fbf3e2;
+
+    --border-color: #2e2213;
+    --warn-bg: #f6e2a8;
+    --warn-text: #6b5010;
+    --code-bg: #2a2013;
+    --code-fg: #f4e6c8;
+}
+
+/* Midnight — deep indigo dark */
+body.dark-theme.theme-midnight {
+    --bg-main: #14161f;
+    --bg-panel: rgba(30, 34, 51, 0.74);
+    --bg-panel-solid: #1c2030;
+    --bg-input: rgba(16, 18, 28, 0.8);
+    --bg-scrollbar-track: #1f2434;
+
+    --accent-primary: #7c8cf0;
+    --accent-primary-dark: #5f6fd6;
+    --accent-secondary: #e58d71;
+    --accent-secondary-dark: #cc6d4e;
+
+    --text-main: #e7e9f5;
+    --text-light: #a6acc8;
+    --text-on-accent: #101018;
+
+    --border-color: #080a12;
+    --code-bg: #101018;
+    --code-fg: #e2e4f0;
+}
+
+/* Forest — deep green dark */
+body.dark-theme.theme-forest {
+    --bg-main: #131a15;
+    --bg-panel: rgba(28, 40, 32, 0.74);
+    --bg-panel-solid: #1a251d;
+    --bg-input: rgba(14, 20, 16, 0.8);
+    --bg-scrollbar-track: #1f2c23;
+
+    --accent-primary: #7fb37a;
+    --accent-primary-dark: #5f8f5a;
+    --accent-secondary: #e0a06a;
+    --accent-secondary-dark: #c1824c;
+
+    --text-main: #e8f0e6;
+    --text-light: #aebfac;
+    --text-on-accent: #0f150f;
+
+    --border-color: #070c08;
+    --code-bg: #0f150f;
+    --code-fg: #e2ece0;
+}
+
 * {
     box-sizing: border-box;
     margin: 0;
@@ -414,6 +511,18 @@ select {
 }
 .snapshot-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .snapshot-row button { flex: none; }
+
+/* Icon generation row */
+.icon-gen-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+.icon-gen-row input {
+    flex: 1;
+    min-width: 0;
+}
+.icon-gen-row button { flex: none; }
 
 /* ---------------------------------------------------------------- *
  * Sidebar

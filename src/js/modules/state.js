@@ -1,4 +1,5 @@
 import { scheduleSave, flushSave } from './persist.js';
+import { readStoredTheme } from './themes.js';
 
 /** Generation defaults applied when an Aspect does not override them. */
 export const DEFAULT_PARAMS = {
@@ -48,7 +49,10 @@ export let state = {
         // system prompt per request. Prevents a few large attached files from
         // silently ballooning every request's token cost (or tripping an
         // opaque "context length exceeded" error from the provider).
-        maxKnowledgeChars: readNumber('maxKnowledgeChars', 100000)
+        maxKnowledgeChars: readNumber('maxKnowledgeChars', 100000),
+
+        // Named colour theme (see themes.js). Migrates the old `darkMode` flag.
+        theme: readStoredTheme()
     },
     aspects: [],
     currentAspectId: null,

@@ -3,6 +3,7 @@ import { loadDefaultAspects } from './aspects.js';
 import { updateModelBadge } from './ui.js';
 import { state } from './state.js';
 import { WEBLLM_PROVIDER } from './providers.js';
+import { applyTheme, populateThemeSelect } from './themes.js';
 import { marked } from 'marked';
 
 const el = (id) => document.getElementById(id);
@@ -13,15 +14,9 @@ function setValue(id, value) {
 }
 
 /** Restore the saved theme before the first paint of any view. */
-function applyTheme() {
-    let isDarkMode = false;
-    try {
-        isDarkMode = localStorage.getItem('darkMode') === 'true';
-    } catch { /* storage unavailable — fall back to light */ }
-
-    const toggle = el('dark-mode-toggle');
-    if (toggle) toggle.checked = isDarkMode;
-    document.body.classList.toggle('dark-theme', isDarkMode);
+function restoreTheme() {
+    applyTheme(state.settings.theme);
+    populateThemeSelect(el('theme-select'), state.settings.theme);
 }
 
 /** Grow the composer with its content, up to a sensible ceiling. */
@@ -61,7 +56,7 @@ export async function init() {
     const fallbackSelect = el('fallback-provider-select');
     if (fallbackSelect) fallbackSelect.value = s.fallbackProvider || '';
 
-    applyTheme();
+    restoreTheme();
 
     marked.setOptions({
         breaks: true,

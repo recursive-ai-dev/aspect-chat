@@ -11,6 +11,7 @@ import {
     mixedContentWarning
 } from './providers.js';
 import { getWebLLMModels, isWebGPUAvailable } from './webllm.js';
+import { applyTheme, populateThemeSelect, DEFAULT_THEME, THEMES } from './themes.js';
 
 export { fetchProviderModels };
 
@@ -102,6 +103,8 @@ export function openSettings() {
     if (el('fallback-key-input')) el('fallback-key-input').value = state.settings.fallbackKey || '';
     if (el('fallback-model-input')) el('fallback-model-input').value = state.settings.fallbackModel || '';
 
+    populateThemeSelect(el('theme-select'), state.settings.theme);
+
     applyProviderHints();
     applyFallbackVisibility();
 
@@ -171,10 +174,16 @@ export function saveSettings() {
         } catch { /* ignore */ }
     }
 
-    const darkToggle = el('dark-mode-toggle');
-    const isDarkMode = darkToggle ? darkToggle.checked : false;
-    safeSet('darkMode', String(isDarkMode));
-    document.body.classList.toggle('dark-theme', isDarkMode);
+    const themeSelect = el('theme-select');
+    if (themeSelect && themeSelect.value) {
+        s.theme = THEMES.some(t => t.id === themeSelect.value) ? themeSelect.value : DEFAULT_THEME;
+    } else if (!s.theme) {
+        s.theme = DEFAULT_THEME;
+    }
+    safeSet('theme', s.theme);
+    // Keep the legacy flag roughly in sync for any older code path.
+    safeSet('darkMode', String(!!(THEMES.find(t => t.id === s.theme) || {}).dark));
+    applyTheme(s.theme);
 
     if (typeof window.updateModelBadge === 'function') window.updateModelBadge();
     if (typeof window.showToast === 'function') window.showToast('Settings saved.');

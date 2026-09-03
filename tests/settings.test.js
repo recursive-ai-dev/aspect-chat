@@ -45,7 +45,11 @@ describe('Settings Module', () => {
             <select id="api-model-select" class="hidden" data-testid="model-select"></select>
             <input type="number" id="api-max-context-input" data-testid="max-context-input" />
             <div id="model-fetch-status" data-testid="fetch-status"></div>
-            <input type="checkbox" id="dark-mode-toggle" data-testid="dark-mode-toggle" />
+            <select id="theme-select" data-testid="theme-select">
+                <option value="warm-light">Light</option>
+                <option value="warm-dark">Dark</option>
+                <option value="midnight">Midnight</option>
+            </select>
             <div id="create-aspect-modal" class="hidden" data-testid="create-aspect-modal"></div>
         `;
 
@@ -70,13 +74,13 @@ describe('Settings Module', () => {
     });
 
     describe('saveSettings', () => {
-        it('should update state and storage, and handle dark mode', () => {
+        it('should update state and storage, and apply the chosen theme', () => {
             const providerSelect = screen.getByTestId('provider-select');
             const urlInput = screen.getByTestId('url-input');
             const keyInput = screen.getByTestId('key-input');
             const modelInput = screen.getByTestId('model-input');
             const maxContextInput = screen.getByTestId('max-context-input');
-            const darkModeToggle = screen.getByTestId('dark-mode-toggle');
+            const themeSelect = screen.getByTestId('theme-select');
             const modal = screen.getByTestId('settings-modal');
 
             providerSelect.value = 'custom';
@@ -84,7 +88,7 @@ describe('Settings Module', () => {
             keyInput.value = ' test-key ';
             modelInput.value = ' gpt-4o ';
             maxContextInput.value = '30';
-            darkModeToggle.checked = true;
+            themeSelect.value = 'warm-dark';
             sessionStorage.setItem('apiKey', 'some-key');
             localStorage.setItem('apiKey', 'some-key');
 
@@ -95,11 +99,13 @@ describe('Settings Module', () => {
             expect(state.settings.model).toBe('gpt-4o');
             expect(state.settings.maxContext).toBe(30);
             expect(state.settings.provider).toBe('custom');
+            expect(state.settings.theme).toBe('warm-dark');
 
             expect(localStorage.getItem('provider')).toBe('custom');
             expect(localStorage.getItem('apiUrl')).toBe('https://api.openai.com/v1');
             expect(localStorage.getItem('model')).toBe('gpt-4o');
             expect(localStorage.getItem('maxContext')).toBe('30');
+            expect(localStorage.getItem('theme')).toBe('warm-dark');
             expect(localStorage.getItem('darkMode')).toBe('true');
 
             // No "remember" toggle in this fixture means the default applies:
@@ -137,14 +143,15 @@ describe('Settings Module', () => {
             expect(sessionStorage.getItem('apiKey')).toBeNull();
         });
 
-        it('should remove dark mode if unchecked', () => {
-            const darkModeToggle = screen.getByTestId('dark-mode-toggle');
-            darkModeToggle.checked = false;
+        it('should drop the dark class when a light theme is chosen', () => {
+            const themeSelect = screen.getByTestId('theme-select');
+            themeSelect.value = 'warm-light';
             document.body.classList.add('dark-theme');
 
             saveSettings();
 
             expect(document.body).not.toHaveClass('dark-theme');
+            expect(localStorage.getItem('theme')).toBe('warm-light');
             expect(localStorage.getItem('darkMode')).toBe('false');
         });
     });
