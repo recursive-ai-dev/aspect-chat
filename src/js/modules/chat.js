@@ -12,9 +12,24 @@ export function escapeHtml(str) {
 
         export function renderChatMessages() {
             const container = document.getElementById('chat-messages');
+            if (!container) return;
             const aspect = getCurrentAspect();
             if (!aspect || !aspect.chatHistory) {
                 container.innerHTML = '';
+                return;
+            }
+
+            if (aspect.chatHistory.length === 0) {
+                container.innerHTML = '';
+                const empty = document.createElement('div');
+                empty.className = 'chat-empty-state';
+                const heading = document.createElement('h3');
+                heading.textContent = aspect.name;
+                const sub = document.createElement('p');
+                sub.textContent = aspect.description || 'Start a new conversation.';
+                empty.appendChild(heading);
+                empty.appendChild(sub);
+                container.appendChild(empty);
                 return;
             }
 
@@ -94,18 +109,27 @@ export function escapeHtml(str) {
                             bubble.innerHTML = msg._renderedHtml;
                         }
                         
-                        // We must bind correct index to action buttons every time because indices can shift
+                        // Rebind on every render: indices shift whenever a
+                        // message is inserted or deleted, so a handler captured
+                        // once would act on the wrong message.
+                        actions.innerHTML = '';
+                        const addAction = (label, title, handler) => {
+                            const btn = document.createElement('button');
+                            btn.className = 'msg-action-btn';
+                            btn.innerText = label;
+                            btn.title = title;
+                            btn.onclick = handler;
+                            actions.appendChild(btn);
+                            return btn;
+                        };
+
+                        addAction('📋', 'Copy message', (e) => copyMessage(index, e.currentTarget));
                         if (msg.role === 'user') {
-                            actions.innerHTML = `
-                                <button class="msg-action-btn" onclick="editMessage(${index})" title="Edit message">✏️</button>
-                                <button class="msg-action-btn" onclick="deleteMessage(${index})" title="Delete message">🗑️</button>
-                            `;
+                            addAction('✏️', 'Edit message', () => editMessage(index));
                         } else if (msg.role === 'assistant') {
-                            actions.innerHTML = `
-                                <button class="msg-action-btn" onclick="regenerateMessage(${index})" title="Regenerate from here">🔄</button>
-                                <button class="msg-action-btn" onclick="deleteMessage(${index})" title="Delete message">🗑️</button>
-                            `;
+                            addAction('🔄', 'Regenerate from here', () => regenerateMessage(index));
                         }
+                        addAction('🗑️', 'Delete message', () => deleteMessage(index));
                     }
                 }
             });
@@ -174,6 +198,10 @@ export function escapeHtml(str) {
 
         export function createStreamingBubble() {
             const container = document.getElementById('chat-messages');
+            // The empty-state placeholder is not a message wrapper; remove it
+            // before appending, or the diffing render would treat it as one.
+            const placeholder = container.querySelector('.chat-empty-state');
+            if (placeholder) placeholder.remove();
             const wrapper = document.createElement('div');
             wrapper.className = `message-wrapper assistant streaming`;
             
@@ -189,12 +217,61 @@ export function escapeHtml(str) {
 
         let lastStreamUpdate = 0;
         export function updateStreamingBubble(bubble, content, force = false) {
+            if (!bubble) return;
             const now = Date.now();
-            if (force || now - lastStreamUpdate > 50) { // throttle parsing to every 50ms
+            // Re-parsing Markdown on every token is the expensive part, so it is
+            // throttled. `force` is used for the final chunk, which must always
+            // render or the tail of the answer would be dropped.
+            if (force || now - lastStreamUpdate > 50) {
                 bubble.innerHTML = DOMPurify.sanitize(marked.parse(content));
                 const container = document.getElementById('chat-messages');
-                container.scrollTop = container.scrollHeight;
+                if (container) container.scrollTop = container.scrollHeight;
                 lastStreamUpdate = now;
+            }
+        }
+
+        /**
+         * Copy a message's raw Markdown (not the rendered HTML) to the clipboard.
+         *
+         * navigator.clipboard is unavailable on insecure origins and in some
+         * embedded webviews, so fall back to a hidden textarea + execCommand
+         * rather than failing silently.
+         */
+        export async function copyMessage(index, button) {
+            const aspect = getCurrentAspect();
+            if (!aspect || !aspect.chatHistory) return;
+            const msg = aspect.chatHistory[index];
+            if (!msg) return;
+            const text = msg.content || '';
+
+            const flash = (label) => {
+                if (!button) return;
+                const original = button.innerText;
+                button.innerText = label;
+                setTimeout(() => { button.innerText = original; }, 1200);
+            };
+
+            try {
+                if (navigator.clipboard && window.isSecureContext) {
+                    await navigator.clipboard.writeText(text);
+                } else {
+                    const scratch = document.createElement('textarea');
+                    scratch.value = text;
+                    scratch.setAttribute('readonly', '');
+                    scratch.style.position = 'fixed';
+                    scratch.style.opacity = '0';
+                    document.body.appendChild(scratch);
+                    scratch.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(scratch);
+                }
+                flash('✅');
+            } catch (err) {
+                console.error('Copy failed', err);
+                flash('❌');
+                if (typeof window.showToast === 'function') {
+                    window.showToast('Could not copy to the clipboard.', 'error');
+                }
             }
         }
 

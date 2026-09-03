@@ -102,11 +102,39 @@ describe('Settings Module', () => {
             expect(localStorage.getItem('maxContext')).toBe('30');
             expect(localStorage.getItem('darkMode')).toBe('true');
 
+            // No "remember" toggle in this fixture means the default applies:
+            // the key is remembered so a reload does not log the user out.
+            expect(localStorage.getItem('apiKey')).toBe('test-key');
             expect(sessionStorage.getItem('apiKey')).toBeNull();
-            expect(localStorage.getItem('apiKey')).toBeNull();
 
             expect(document.body).toHaveClass('dark-theme');
             expect(modal).toHaveClass('hidden');
+        });
+
+        it('should keep the API key out of localStorage when remember is off', () => {
+            document.body.insertAdjacentHTML('beforeend',
+                '<input type="checkbox" id="remember-key-toggle" />');
+            document.getElementById('remember-key-toggle').checked = false;
+            screen.getByTestId('key-input').value = 'ephemeral-key';
+
+            saveSettings();
+
+            expect(state.settings.rememberKey).toBe(false);
+            expect(localStorage.getItem('apiKey')).toBeNull();
+            // Still available for the rest of this tab's session.
+            expect(sessionStorage.getItem('apiKey')).toBe('ephemeral-key');
+        });
+
+        it('should store the API key when remember is on', () => {
+            document.body.insertAdjacentHTML('beforeend',
+                '<input type="checkbox" id="remember-key-toggle" checked />');
+            screen.getByTestId('key-input').value = 'durable-key';
+
+            saveSettings();
+
+            expect(state.settings.rememberKey).toBe(true);
+            expect(localStorage.getItem('apiKey')).toBe('durable-key');
+            expect(sessionStorage.getItem('apiKey')).toBeNull();
         });
 
         it('should remove dark mode if unchecked', () => {
@@ -169,7 +197,7 @@ describe('Settings Module', () => {
 
             await fetchModelsIfPossible();
 
-            expect(screen.getByTestId('fetch-status').innerText).toBe('Please enter an API key to fetch available models.');
+            expect(screen.getByTestId('fetch-status').innerText).toBe('Enter an API key to fetch the available models.');
         });
 
         it('should fetch successfully and populate model select', async () => {
@@ -191,7 +219,7 @@ describe('Settings Module', () => {
             expect(modelSelect.options.length).toBe(2);
             expect(modelSelect.options[0].value).toBe('model1');
 
-            expect(screen.getByTestId('fetch-status').innerText).toBe('Models fetched successfully.');
+            expect(screen.getByTestId('fetch-status').innerText).toBe('2 models available.');
         });
 
         it('should handle 401 unauthorized response', async () => {
@@ -207,7 +235,7 @@ describe('Settings Module', () => {
 
             await fetchModelsIfPossible();
 
-            expect(screen.getByTestId('fetch-status').innerText).toContain('Unauthorized or invalid API key (401)');
+            expect(screen.getByTestId('fetch-status').innerText).toContain('Unauthorized (401)');
         });
         
         it('should update statusDiv on network error', async () => {
@@ -295,7 +323,7 @@ describe('Settings Module', () => {
                     return new HttpResponse('no json', { status: 500, statusText: 'Internal Server Error' });
                 })
             );
-            await expect(fetchProviderModels('http://api.example.com', 'key')).rejects.toThrow('Error 500: Internal Server Error');
+            await expect(fetchProviderModels('http://api.example.com', 'key')).rejects.toThrow('Error 500: no json');
         });
 
         it('should throw Rate limit exceeded for 429', async () => {
@@ -304,7 +332,7 @@ describe('Settings Module', () => {
                     return HttpResponse.json({}, { status: 429, statusText: 'Too Many Requests' });
                 })
             );
-            await expect(fetchProviderModels('http://api.example.com', 'key')).rejects.toThrow('Rate limit exceeded (429).');
+            await expect(fetchProviderModels('http://api.example.com', 'key')).rejects.toThrow('Rate limited (429)');
         });
 
         it('should throw No models found if models array is empty', async () => {
@@ -361,7 +389,7 @@ describe('Settings Module', () => {
                     return HttpResponse.json({}, { status: 403, statusText: 'Forbidden' });
                 })
             );
-            await expect(fetchProviderModels('http://api.example.com', 'key')).rejects.toThrow('Unauthorized or invalid API key (403).');
+            await expect(fetchProviderModels('http://api.example.com', 'key')).rejects.toThrow('Unauthorized (403)');
         });
 
         it('should handle missing error.message correctly (falling back to errData.message)', async () => {

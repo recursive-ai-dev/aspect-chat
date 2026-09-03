@@ -5,6 +5,8 @@ import { getCurrentAspect } from './aspects.js';
 import { markChangesSaved } from './state.js';
 import { state } from './state.js';
 import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
+import { normalizeAspect } from './aspects.js';
+import { newId } from './conversations.js';
 
 
         export async function saveAspectToFile() {
@@ -60,7 +62,32 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
                 }
             }
 
-            // Save history in standard format
+            // Chat history is written twice, on purpose:
+            //
+            //  - conversations.json is the lossless record. It round-trips every
+            //    conversation with its title, timestamps and exact message text.
+            //  - ChatHistory/History.md is the human-readable transcript of the
+            //    active conversation, and is what older builds of Aspect Studio
+            //    (and the documented .aspect layout) know how to read.
+            //
+            // Import prefers the JSON and falls back to the Markdown, so files
+            // move in both directions without losing anything.
+            const conversations = (aspect.conversations || []).map(conv => ({
+                id: conv.id,
+                title: conv.title,
+                titleLocked: !!conv.titleLocked,
+                createdAt: conv.createdAt,
+                updatedAt: conv.updatedAt,
+                messages: (conv.messages || [])
+                    .filter(m => m.role === 'user' || m.role === 'assistant')
+                    .map(m => ({ role: m.role, content: m.content }))
+            }));
+            zip.file("ChatHistory/conversations.json", JSON.stringify({
+                version: 2,
+                activeConversationId: aspect.activeConversationId,
+                conversations
+            }, null, 2));
+
             let historyMd = "";
             aspect.chatHistory.forEach(msg => {
                 if (msg.role === 'user' || msg.role === 'assistant') {
@@ -68,6 +95,15 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
                 }
             });
             zip.file("ChatHistory/History.md", historyMd);
+
+            // Generation settings and editor mode travel with the Aspect so an
+            // imported one behaves exactly as it did for its author.
+            zip.file("config.json", JSON.stringify({
+                params: aspect.params || {},
+                basicMode: aspect.basicMode,
+                basicDescription: aspect.basicDescription,
+                basicTone: aspect.basicTone
+            }, null, 2));
 
             // Export raw knowledge files from IndexedDB
             const rawKnowledgeFiles = await getKnowledgeFilesRaw(aspect.id);
@@ -167,8 +203,41 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
                     }
                 }
 
+                // Prefer the lossless conversation record; fall back to the
+                // Markdown transcript for files written before it existed.
+                let conversations = null;
+                let activeConversationId = null;
+                const conversationsEntry = zip.file("ChatHistory/conversations.json");
+                if (conversationsEntry) {
+                    try {
+                        const parsed = JSON.parse(await conversationsEntry.async("string"));
+                        if (Array.isArray(parsed?.conversations) && parsed.conversations.length > 0) {
+                            conversations = parsed.conversations.map(conv => ({
+                                // Re-key on import so importing the same file
+                                // twice cannot collide with the existing copy.
+                                id: newId('conv'),
+                                originalId: conv.id,
+                                title: conv.title || 'Imported chat',
+                                titleLocked: !!conv.titleLocked,
+                                createdAt: conv.createdAt || Date.now(),
+                                updatedAt: conv.updatedAt || conv.createdAt || Date.now(),
+                                messages: Array.isArray(conv.messages)
+                                    ? conv.messages
+                                        .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+                                        .map(m => ({ role: m.role, content: m.content }))
+                                    : []
+                            }));
+                            const match = conversations.find(c => c.originalId === parsed.activeConversationId);
+                            activeConversationId = (match || conversations[0]).id;
+                            conversations.forEach(c => { delete c.originalId; });
+                        }
+                    } catch (e) {
+                        console.error("Failed to parse conversations.json during aspect import", e.message);
+                    }
+                }
+
                 const chatHistory = [];
-                if (zip.file("ChatHistory/History.md")) {
+                if (!conversations && zip.file("ChatHistory/History.md")) {
                     const histMd = await zip.file("ChatHistory/History.md").async("string");
                     const blocks = histMd.split('### ').slice(1);
                     blocks.forEach(block => {
@@ -182,8 +251,17 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
                     });
                 }
 
-                const newAspect = {
-                    id: Date.now().toString(),
+                let config = {};
+                if (zip.file("config.json")) {
+                    try {
+                        config = JSON.parse(await zip.file("config.json").async("string")) || {};
+                    } catch (e) {
+                        console.error("Failed to parse config.json during aspect import", e.message);
+                    }
+                }
+
+                const newAspect = normalizeAspect({
+                    id: newId('aspect'),
                     name,
                     description: desc,
                     instructions: instr,
@@ -192,8 +270,14 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
                     background,
                     tools,
                     memory,
-                    chatHistory
-                };
+                    params: config.params || {},
+                    basicMode: config.basicMode,
+                    basicDescription: config.basicDescription,
+                    basicTone: config.basicTone,
+                    ...(conversations
+                        ? { conversations, activeConversationId }
+                        : { chatHistory })
+                });
 
                 state.aspects.push(newAspect);
                 state.currentAspectId = newAspect.id;

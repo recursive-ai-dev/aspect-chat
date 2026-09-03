@@ -1,11 +1,13 @@
 import { deleteAspectData } from './db.js';
 import { applyAspectBackground } from './ui.js';
 import { showChatView } from './ui.js';
-import { saveAspectsToLocalStorage } from './state.js';
+import { persistAspects } from './state.js';
 import { showEditorView } from './ui.js';
 import { markChangesUnsaved } from './ui.js';
 import { state } from './state.js';
 import { systemTools } from './systemTools.js';
+import { loadAspects, deleteAspectRecord } from './persist.js';
+import { normalizeConversations, newId } from './conversations.js';
 
 
         export function getLakesideSageIcon() {
@@ -193,22 +195,24 @@ import { systemTools } from './systemTools.js';
         }
 
 
-        export function loadDefaultAspects() {
-            const saved = localStorage.getItem('aspects_data');
-            if (saved) {
-                try {
-                    state.aspects = JSON.parse(saved);
-                    if (state.aspects.length > 0) {
-                        state.currentAspectId = state.aspects[0].id;
-                        renderAspectList();
-                        applyAspectBackground();
-                        showChatView();
-                        return;
-                    }
-                } catch (e) {
-                    console.error("Failed to load saved aspects from localStorage", e);
-                    state.aspects = [];
-                }
+        export async function loadDefaultAspects() {
+            let saved = [];
+            try {
+                saved = await loadAspects();
+            } catch (e) {
+                console.error("Failed to load saved aspects", e);
+                saved = [];
+            }
+
+            if (Array.isArray(saved) && saved.length > 0) {
+                state.aspects = saved.map(a => normalizeAspect(a));
+                const lastId = (typeof localStorage !== 'undefined') && localStorage.getItem('currentAspectId');
+                const restored = lastId && state.aspects.find(a => a.id === lastId);
+                state.currentAspectId = restored ? restored.id : state.aspects[0].id;
+                renderAspectList();
+                applyAspectBackground();
+                showChatView();
+                return;
             }
 
             // Create Studio Guide default
@@ -321,11 +325,38 @@ async function executeTool(args, state) {
                 ]
             };
 
-            state.aspects = [defaultAspect];
+            state.aspects = [normalizeAspect(defaultAspect)];
             state.currentAspectId = defaultAspect.id;
-            saveAspectsToLocalStorage();
+            persistAspects();
             renderAspectList();
             showChatView();
+        }
+
+        /**
+         * Fill in any fields an Aspect may be missing.
+         *
+         * Aspects arrive from three places with slightly different shapes:
+         * templates, imported .aspect files, and rows saved by older versions.
+         * Normalising once here means the rest of the app can assume every
+         * field exists rather than guarding at each use.
+         */
+        export function normalizeAspect(aspect) {
+            if (!aspect || typeof aspect !== 'object') return aspect;
+
+            if (!aspect.id) aspect.id = newId('aspect');
+            if (typeof aspect.name !== 'string') aspect.name = 'Untitled Aspect';
+            if (typeof aspect.description !== 'string') aspect.description = '';
+            if (typeof aspect.instructions !== 'string') aspect.instructions = '';
+            if (typeof aspect.knowledge !== 'string') aspect.knowledge = '';
+            if (!Array.isArray(aspect.tools)) aspect.tools = [];
+            if (!aspect.memory || typeof aspect.memory !== 'object') aspect.memory = {};
+            if (!aspect.params || typeof aspect.params !== 'object') aspect.params = {};
+
+            aspect.tools.forEach(tool => {
+                if (!tool.state || typeof tool.state !== 'object') tool.state = {};
+            });
+
+            return normalizeConversations(aspect);
         }
 
         export function getGenericIcon() {
@@ -498,8 +529,8 @@ async function executeTool(args, state) {
 
             const iconVal = typeof template.icon === 'function' ? template.icon() : (template.icon || getGenericIcon());
 
-            const newAspect = {
-                id: Date.now().toString(),
+            const newAspect = normalizeAspect({
+                id: newId('aspect'),
                 name: template.name === 'Blank Aspect' ? 'New Aspect' : template.name,
                 description: template.desc,
                 instructions: template.instructions,
@@ -507,8 +538,10 @@ async function executeTool(args, state) {
                 icon: iconVal,
                 background: template.background || 'alone_image_pack/lake_sunset_002.jpeg',
                 tools: initialTools,
+                memory: {},
+                params: {},
                 chatHistory: template.chatHistory ? JSON.parse(JSON.stringify(template.chatHistory)) : []
-            };
+            });
 
             state.aspects.push(newAspect);
             state.currentAspectId = newAspect.id;
@@ -531,12 +564,16 @@ async function executeTool(args, state) {
         }
 
         export function acceptCreateAspect() {
-            const name = document.getElementById('create-aspect-name-input').value.trim() || 'New Aspect';
-            const desc = document.getElementById('create-aspect-desc-input').value.trim() || 'A brand new persona.';
+            // These inputs only exist in the legacy "name and description first"
+            // create flow; the template gallery is the path the UI uses today.
+            const nameInput = document.getElementById('create-aspect-name-input');
+            const descInput = document.getElementById('create-aspect-desc-input');
+            const name = (nameInput && nameInput.value.trim()) || 'New Aspect';
+            const desc = (descInput && descInput.value.trim()) || 'A brand new persona.';
             const icon = window.tempCreateIcon || getGenericIcon();
 
-            const newAspect = {
-                id: Date.now().toString(),
+            const newAspect = normalizeAspect({
+                id: newId('aspect'),
                 name: name,
                 description: desc,
                 instructions: 'You are a helpful assistant.',
@@ -545,8 +582,9 @@ async function executeTool(args, state) {
                 background: 'alone_image_pack/lake_sunset_002.jpeg',
                 tools: [],
                 memory: {},
+                params: {},
                 chatHistory: []
-            };
+            });
             state.aspects.push(newAspect);
             state.currentAspectId = newAspect.id;
             renderAspectList();
@@ -562,13 +600,22 @@ async function executeTool(args, state) {
 
         export function selectAspect(id) {
             state.currentAspectId = id;
+            // Remember the selection so a reload reopens where the user left off.
+            try {
+                if (typeof localStorage !== 'undefined') localStorage.setItem('currentAspectId', id);
+            } catch { /* private mode — the default selection still works */ }
+            const aspect = state.aspects.find(a => a.id === id);
+            if (aspect) normalizeAspect(aspect);
             renderAspectList();
             applyAspectBackground();
             showChatView();
         }
 
         export function getCurrentAspect() {
-            return state.aspects.find(a => a.id === state.currentAspectId);
+            const aspect = state.aspects.find(a => a.id === state.currentAspectId);
+            // Guarantee callers a conversation-bound chatHistory even for an
+            // Aspect that arrived from an older save or a partial import.
+            return aspect ? normalizeAspect(aspect) : aspect;
         }
 
         export function updateAspectData(field, value) {
@@ -596,6 +643,7 @@ async function executeTool(args, state) {
 
                 try {
                     await deleteAspectData(deletedAspectId);
+                    await deleteAspectRecord(deletedAspectId);
                 } catch (e) {
                     console.error("Failed to delete aspect data from DB", e);
                 }

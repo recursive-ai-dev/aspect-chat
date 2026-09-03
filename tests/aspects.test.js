@@ -20,7 +20,7 @@ vi.mock('../src/js/modules/state.js', async (importOriginal) => {
     const mod = await importOriginal();
     return {
         ...mod,
-        saveAspectsToLocalStorage: vi.fn(),
+        persistAspects: vi.fn(),
         markChangesUnsaved: vi.fn()
     };
 });
@@ -88,15 +88,22 @@ describe('Aspects Management', () => {
     });
 
     describe('loadDefaultAspects', () => {
-        beforeEach(() => {
+        beforeEach(async () => {
             localStorage.clear();
+            const { resetDatabaseForTesting } = await import('../src/js/modules/idb.js');
+            const { resetPersistForTesting } = await import('../src/js/modules/persist.js');
+            resetPersistForTesting();
+            // Fresh database per case so a migrated library from one test does
+            // not leak into the next.
+            indexedDB.deleteDatabase('AspectKnowledgeDB');
+            await resetDatabaseForTesting();
         });
 
         it('should load saved aspects from localStorage if valid', async () => {
             const savedAspects = [{ id: 'test1', name: 'Saved Aspect' }];
             localStorage.setItem('aspects_data', JSON.stringify(savedAspects));
 
-            aspects.loadDefaultAspects();
+            await aspects.loadDefaultAspects();
 
             expect(state.aspects.length).toBe(1);
             expect(state.currentAspectId).toBe('test1');
@@ -105,7 +112,7 @@ describe('Aspects Management', () => {
         });
 
         it('should load default Studio Guide if localStorage is empty', async () => {
-            aspects.loadDefaultAspects();
+            await aspects.loadDefaultAspects();
 
             expect(state.aspects.length).toBe(1);
             expect(state.aspects[0].id).toBe('studio-guide');
@@ -113,14 +120,14 @@ describe('Aspects Management', () => {
             const ui = await import('../src/js/modules/ui.js');
             expect(ui.showChatView).toHaveBeenCalled();
             const stateModule = await import('../src/js/modules/state.js');
-            expect(stateModule.saveAspectsToLocalStorage).toHaveBeenCalled();
+            expect(stateModule.persistAspects).toHaveBeenCalled();
         });
 
         it('should load default Studio Guide if localStorage is invalid JSON', async () => {
             const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
             localStorage.setItem('aspects_data', 'invalid json');
-            aspects.loadDefaultAspects();
+            await aspects.loadDefaultAspects();
             expect(state.aspects.length).toBe(1);
             expect(state.aspects[0].id).toBe('studio-guide');
 

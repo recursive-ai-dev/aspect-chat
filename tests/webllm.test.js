@@ -17,8 +17,12 @@ vi.mock('@mlc-ai/web-llm', () => ({
 describe('WebLLM Module', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        // Since engine state is kept in module scope, we can't easily reset it
-        // but we can test initialization behavior
+        webllm.resetWebLLMForTesting();
+        // WebLLM requires WebGPU, which jsdom does not implement. Stub the
+        // capability check so the engine lifecycle itself can be tested.
+        if (!navigator.gpu) {
+            Object.defineProperty(navigator, 'gpu', { value: {}, configurable: true });
+        }
     });
 
     it('getWebLLMModels should return list of model IDs', async () => {
@@ -63,5 +67,42 @@ describe('WebLLM Module', () => {
         const engine = await webllm.initWebLLMEngine('model-2', initCb);
         expect(engine.modelId).toBe('model-2');
         expect(CreateMLCEngine).toHaveBeenCalledWith('model-2', { initProgressCallback: initCb });
+    });
+
+    it('isWebGPUAvailable reflects navigator.gpu', () => {
+        expect(webllm.isWebGPUAvailable()).toBe(true);
+    });
+
+    it('initWebLLMEngine refuses without WebGPU and explains why', async () => {
+        const original = navigator.gpu;
+        Object.defineProperty(navigator, 'gpu', { value: undefined, configurable: true });
+        await expect(webllm.initWebLLMEngine('model-1')).rejects.toThrow('WebGPU');
+        Object.defineProperty(navigator, 'gpu', { value: original, configurable: true });
+    });
+
+    it('initWebLLMEngine requires a model id', async () => {
+        await expect(webllm.initWebLLMEngine('')).rejects.toThrow('No WebLLM model selected');
+    });
+
+    it('concurrent initialisation for the same model shares one engine build', async () => {
+        const { CreateMLCEngine } = await import('@mlc-ai/web-llm');
+        CreateMLCEngine.mockClear();
+
+        const [a, b] = await Promise.all([
+            webllm.initWebLLMEngine('model-shared'),
+            webllm.initWebLLMEngine('model-shared')
+        ]);
+
+        expect(a).toBe(b);
+        // Without request coalescing this would start two multi-gigabyte downloads.
+        expect(CreateMLCEngine).toHaveBeenCalledTimes(1);
+    });
+
+    it('a failed load leaves no half-built engine behind', async () => {
+        const { CreateMLCEngine } = await import('@mlc-ai/web-llm');
+        CreateMLCEngine.mockRejectedValueOnce(new Error('out of memory'));
+
+        await expect(webllm.initWebLLMEngine('broken-model')).rejects.toThrow('out of memory');
+        expect(webllm.getEngine()).toBeNull();
     });
 });
