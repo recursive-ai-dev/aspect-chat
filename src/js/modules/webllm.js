@@ -11,6 +11,16 @@ let currentModelId = null;
 let loadingPromise = null;
 let cachedModelList = null;
 
+// All engine lifecycle operations run through this chain so two rapid calls
+// (e.g. a fast model switch, or a double-send) can never build two engines at
+// once and leave `engine` pointing at whichever finished last.
+let opChain = Promise.resolve();
+function serialize(fn) {
+    const run = opChain.then(fn, fn);
+    opChain = run.then(() => {}, () => {});
+    return run;
+}
+
 /**
  * The web-llm bundle is large. Import it only when a WebLLM model is actually
  * requested so it never lands in the critical path of a normal API-backed chat.
@@ -38,38 +48,46 @@ export async function getWebLLMModels() {
  * Concurrent calls for the same model share one initialisation: without this,
  * a fast double-send would start two multi-gigabyte downloads at once.
  */
-export async function initWebLLMEngine(modelId, initProgressCallback) {
+export function initWebLLMEngine(modelId, initProgressCallback) {
     if (!modelId) {
-        throw new Error('No WebLLM model selected. Choose one in API Settings.');
+        return Promise.reject(new Error('No WebLLM model selected. Choose one in API Settings.'));
     }
-    if (engine && currentModelId === modelId) {
-        return engine;
-    }
-    if (loadingPromise && currentModelId === modelId) {
-        return loadingPromise;
+    // Fast path: the engine is already the one we want.
+    if (engine && currentModelId === modelId && !loadingPromise) {
+        return Promise.resolve(engine);
     }
 
-    if (!isWebGPUAvailable()) {
-        throw new Error('WebLLM needs WebGPU, which this browser does not expose. Use a recent Chrome, Edge, or Chromium build, or point Aspect Studio at a local server instead.');
-    }
-
-    currentModelId = modelId;
-    loadingPromise = (async () => {
-        try {
-            const { CreateMLCEngine } = await loadWebLLM();
-            engine = await CreateMLCEngine(modelId, { initProgressCallback });
+    return serialize(async () => {
+        // Re-check inside the queue: a preceding op may have built exactly this.
+        if (engine && currentModelId === modelId) {
             return engine;
-        } catch (err) {
-            // Leave no half-built engine behind for the next attempt to reuse.
-            engine = null;
-            currentModelId = null;
-            throw new Error(`Failed to load WebLLM model "${modelId}": ${err.message}`);
-        } finally {
-            loadingPromise = null;
         }
-    })();
+        if (!isWebGPUAvailable()) {
+            throw new Error('WebLLM needs WebGPU, which this browser does not expose. Use a recent Chrome, Edge, or Chromium build, or point Aspect Studio at a local server instead.');
+        }
 
-    return loadingPromise;
+        // Switching models: free the old engine's GPU buffers first.
+        if (engine && currentModelId !== modelId && typeof engine.unload === 'function') {
+            try { await engine.unload(); } catch { /* best effort */ }
+            engine = null;
+        }
+
+        currentModelId = modelId;
+        loadingPromise = (async () => {
+            try {
+                const { CreateMLCEngine } = await loadWebLLM();
+                engine = await CreateMLCEngine(modelId, { initProgressCallback });
+                return engine;
+            } catch (err) {
+                engine = null;
+                currentModelId = null;
+                throw new Error(`Failed to load WebLLM model "${modelId}": ${err.message}`);
+            } finally {
+                loadingPromise = null;
+            }
+        })();
+        return loadingPromise;
+    });
 }
 
 export function getEngine() {
@@ -77,17 +95,19 @@ export function getEngine() {
 }
 
 /** Drop the engine and free its GPU buffers. */
-export async function unloadWebLLMEngine() {
-    if (engine && typeof engine.unload === 'function') {
-        try {
-            await engine.unload();
-        } catch (err) {
-            console.warn('WebLLM engine unload failed', err.message);
+export function unloadWebLLMEngine() {
+    return serialize(async () => {
+        if (engine && typeof engine.unload === 'function') {
+            try {
+                await engine.unload();
+            } catch (err) {
+                console.warn('WebLLM engine unload failed', err.message);
+            }
         }
-    }
-    engine = null;
-    currentModelId = null;
-    loadingPromise = null;
+        engine = null;
+        currentModelId = null;
+        loadingPromise = null;
+    });
 }
 
 /**
@@ -145,4 +165,5 @@ export function resetWebLLMForTesting() {
     currentModelId = null;
     loadingPromise = null;
     cachedModelList = null;
+    opChain = Promise.resolve();
 }

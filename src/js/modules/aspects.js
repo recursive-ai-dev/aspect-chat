@@ -201,7 +201,15 @@ import { normalizeConversations, newId } from './conversations.js';
                 saved = await loadAspects();
             } catch (e) {
                 console.error("Failed to load saved aspects", e);
-                saved = [];
+                // A genuine read failure. Do NOT fall through to building and
+                // persisting a fresh default library — the debounced save would
+                // then purge the rows we could not read. Surface it and stop.
+                if (typeof window !== 'undefined' && typeof window.showStorageError === 'function') {
+                    window.showStorageError();
+                }
+                state.aspects = [];
+                state.currentAspectId = null;
+                return;
             }
 
             if (Array.isArray(saved) && saved.length > 0) {
@@ -351,6 +359,13 @@ async function executeTool(args, state) {
             if (!Array.isArray(aspect.tools)) aspect.tools = [];
             if (!aspect.memory || typeof aspect.memory !== 'object') aspect.memory = {};
             if (!aspect.params || typeof aspect.params !== 'object') aspect.params = {};
+
+            // Tools are trusted by default (the user authored them here, or an
+            // older save predates this flag). Only .aspect import sets it false,
+            // which gates execution until the user reviews the code.
+            if (aspect.toolsReviewed === undefined) {
+                aspect.toolsReviewed = true;
+            }
 
             aspect.tools.forEach(tool => {
                 if (!tool.state || typeof tool.state !== 'object') tool.state = {};
@@ -625,6 +640,25 @@ async function executeTool(args, state) {
                 if (field === 'name' || field === 'icon') renderAspectList();
                 markChangesUnsaved();
             }
+        }
+
+        /**
+         * Mark an imported Aspect's tools as reviewed so they can run. Called
+         * from the editor after the user has had the chance to read the code.
+         */
+        export function trustAspectTools() {
+            const aspect = getCurrentAspect();
+            if (!aspect) return;
+            if (!window.confirm(
+                `Enable ${aspect.tools.length} tool(s) on "${aspect.name}"?\n\n` +
+                `These were imported from an .aspect file. They run JavaScript in a ` +
+                `sandboxed worker and can make network requests. Only enable them if ` +
+                `you have reviewed the code and trust its source.`
+            )) return;
+            aspect.toolsReviewed = true;
+            markChangesUnsaved();
+            if (typeof window.showEditorView === 'function') window.showEditorView();
+            if (typeof window.showToast === 'function') window.showToast('Tools enabled for this Aspect.');
         }
 
         export async function deleteCurrentAspect() {

@@ -42,7 +42,13 @@ export let state = {
         fallbackKey: (typeof localStorage !== 'undefined' && localStorage.getItem('fallbackKey')) || '',
         fallbackModel: (typeof localStorage !== 'undefined' && localStorage.getItem('fallbackModel')) || '',
 
-        toolTimeoutMs: readNumber('toolTimeoutMs', 30000)
+        toolTimeoutMs: readNumber('toolTimeoutMs', 30000),
+
+        // Upper bound on how much knowledge-bank text is injected into the
+        // system prompt per request. Prevents a few large attached files from
+        // silently ballooning every request's token cost (or tripping an
+        // opaque "context length exceeded" error from the provider).
+        maxKnowledgeChars: readNumber('maxKnowledgeChars', 100000)
     },
     aspects: [],
     currentAspectId: null,
@@ -50,7 +56,10 @@ export let state = {
     saveReminderDismissed: false,
     consecutiveToolRuns: 0,
     abortController: null,
-    isGenerating: false
+    isGenerating: false,
+    // Depth of the (possibly self-recursive, via the agentic tool loop)
+    // generation call stack. Teardown only happens when it returns to 0.
+    generationDepth: 0
 };
 
 /** Resolve the generation parameters for an Aspect, filling in defaults. */

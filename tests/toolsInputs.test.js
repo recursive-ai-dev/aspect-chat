@@ -61,6 +61,30 @@ const realWorker = () => {
     return () => { global.Blob = RealBlob; };
 };
 
+describe('buildSystemPrompt - knowledge cap', () => {
+    it('passes knowledge through untouched when under the cap', () => {
+        const out = tools.buildSystemPrompt({ instructions: 'I', knowledge: 'small' }, ' + file text', 1000);
+        expect(out).toContain('small + file text');
+        expect(out).not.toContain('Knowledge truncated');
+    });
+
+    it('truncates and annotates knowledge that exceeds the cap', () => {
+        const big = 'x'.repeat(5000);
+        const out = tools.buildSystemPrompt({ instructions: 'I', knowledge: big }, '', 1000);
+        expect(out).toContain('Knowledge truncated');
+        // Body is clipped to the cap; the notice is appended after it.
+        expect(out.indexOf('xxxx')).toBeGreaterThan(-1);
+        expect(out.length).toBeLessThan(big.length);
+    });
+
+    it('applies no cap when the limit is missing or invalid', () => {
+        const big = 'y'.repeat(3000);
+        const out = tools.buildSystemPrompt({ instructions: 'I', knowledge: big }, '', undefined);
+        expect(out).toContain(big);
+        expect(out).not.toContain('Knowledge truncated');
+    });
+});
+
 describe('buildApiMessages - inputs, variables and edge cases', () => {
     const aspectWith = (chatHistory) => ({
         id: 'a',
@@ -280,6 +304,27 @@ describe('executeJavaScriptTool - argument and input edge cases', () => {
         expect(JSON.parse(res).error).toContain('not found');
     });
 
+    it('refuses to run tools on an imported Aspect until they are reviewed', async () => {
+        const aspect = baseAspect([
+            { name: 'imported', code: 'async function executeTool(){ return "ran"; }' },
+        ]);
+        aspect.name = 'Shared Aspect';
+        aspect.toolsReviewed = false;
+        aspectsModule.getCurrentAspect.mockReturnValue(aspect);
+
+        // Worker must never be constructed for an unreviewed tool.
+        const WorkerSpy = vi.fn();
+        global.Worker = class { constructor(...a) { WorkerSpy(...a); } postMessage() {} terminate() {} };
+        global.URL.createObjectURL = vi.fn().mockReturnValue('u');
+        global.URL.revokeObjectURL = vi.fn();
+
+        const res = await tools.executeJavaScriptTool('imported', '{}');
+        expect(JSON.parse(res).error).toMatch(/not been reviewed/i);
+        expect(WorkerSpy).not.toHaveBeenCalled();
+
+        delete global.Worker; delete global.URL.createObjectURL; delete global.URL.revokeObjectURL;
+    });
+
     it('parses valid JSON args', async () => {
         const aspect = baseAspect([
             { name: 'echo', code: 'async function executeTool(args, state) { return args; }' },
@@ -433,9 +478,9 @@ describe('processAIResponseAndTools - multi-input and edge cases', () => {
         expect(logText).toContain('{"n":42}');
     });
 
-    it('triggers the agentic loop when a tool result requests another tool', async () => {
+    it('chains to another tool only when a tool explicitly opts in via __aspectToolCalls', async () => {
         const aspect = aspectWithHistory([
-            { name: 'outer', code: 'async function executeTool(a,s){return "[Run Tool: inner]";}' },
+            { name: 'outer', code: 'async function executeTool(a,s){return { __aspectToolCalls: [{ name: "inner" }] };}' },
             { name: 'inner', code: 'async function executeTool(a,s){return "done";}' },
         ]);
         aspectsModule.getCurrentAspect.mockReturnValue(aspect);
@@ -445,9 +490,21 @@ describe('processAIResponseAndTools - multi-input and edge cases', () => {
         expect(logText).toContain('Tool Executed:** `inner`');
     });
 
+    it('does NOT chain when a tool merely returns [Run Tool: ...] as free text', async () => {
+        const aspect = aspectWithHistory([
+            { name: 'outer', code: 'async function executeTool(a,s){return "[Run Tool: inner]";}' },
+            { name: 'inner', code: 'async function executeTool(a,s){return "done";}' },
+        ]);
+        aspectsModule.getCurrentAspect.mockReturnValue(aspect);
+        await tools.processAIResponseAndTools('[Run Tool: outer]', aspect);
+        const logText = aspect.chatHistory.map(m => m.content).join('\n');
+        expect(logText).not.toContain('Agentic Loop triggered');
+        expect(logText).not.toContain('Tool Executed:** `inner`');
+    });
+
     it('enforces the 15-consecutive-tool-run loop protection', async () => {
         const aspect = aspectWithHistory([
-            { name: 'again', code: 'async function executeTool(a,s){return "[Run Tool: again]";}' },
+            { name: 'again', code: 'async function executeTool(a,s){return { __aspectToolCalls: [{ name: "again" }] };}' },
         ]);
         aspectsModule.getCurrentAspect.mockReturnValue(aspect);
         // Start at 15 so the very next run exceeds the cap (no deep recursion).

@@ -1,6 +1,5 @@
 import { showChatView } from './ui.js';
 import { renderAspectList } from './aspects.js';
-import JSZip from 'jszip';
 import { getCurrentAspect } from './aspects.js';
 import { markChangesSaved } from './state.js';
 import { state } from './state.js';
@@ -8,11 +7,20 @@ import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
 import { normalizeAspect } from './aspects.js';
 import { newId } from './conversations.js';
 
+// JSZip (~95 KB) is only needed for .aspect import/export. Load it on demand.
+let jszipPromise = null;
+function loadJSZip() {
+    if (!jszipPromise) {
+        jszipPromise = import('jszip').then(m => m.default || m);
+    }
+    return jszipPromise;
+}
 
         export async function saveAspectToFile() {
             const aspect = getCurrentAspect();
             if (!aspect) return;
 
+            const JSZip = await loadJSZip();
             const zip = new JSZip();
             
             zip.file("Name.md", aspect.name);
@@ -132,6 +140,7 @@ import { newId } from './conversations.js';
             if (!file) return;
 
             try {
+                const JSZip = await loadJSZip();
                 const zip = await JSZip.loadAsync(file);
                 
                 const nameFile = zip.file("Name.md");
@@ -269,6 +278,9 @@ import { newId } from './conversations.js';
                     icon,
                     background,
                     tools,
+                    // Imported tool code is arbitrary JavaScript the user has
+                    // not seen. It stays inert until reviewed in the editor.
+                    toolsReviewed: tools.length === 0,
                     memory,
                     params: config.params || {},
                     basicMode: config.basicMode,
@@ -305,6 +317,14 @@ import { newId } from './conversations.js';
                 showChatView();
                 markChangesSaved();
 
+                if (newAspect.toolsReviewed === false) {
+                    window.showToast(
+                        `Imported "${name}" with ${tools.length} tool(s) left DISABLED. ` +
+                        `Open the editor, review the tool code, then enable them.`,
+                        'error'
+                    );
+                }
+
             } catch (err) {
                 console.error("Error loading .aspect file", err);
                 window.showToast(`Error loading .aspect file: ${err.message}`, "error");
@@ -313,19 +333,38 @@ import { newId } from './conversations.js';
             }
         }
 
+        // Full HTML-entity escape, safe for both text and double-quoted
+        // attribute contexts.
+        function esc(value) {
+            return String(value == null ? '' : value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        // Only allow an icon the exported page can safely render as an image.
+        function safeIconSrc(icon) {
+            if (typeof icon !== 'string') return '';
+            return /^data:image\/[a-z+.-]+;base64,[A-Za-z0-9+/=\s]+$/i.test(icon) ? icon : '';
+        }
+
         export async function exportAspectToWebpage() {
             const aspect = getCurrentAspect();
             if (!aspect) return;
 
-            const safeName = aspect.name.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-            const safeDesc = aspect.description.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-            const safeInstructions = aspect.instructions.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            const safeName = esc(aspect.name);
+            const safeDesc = esc(aspect.description);
+            const safeInstructions = esc(aspect.instructions);
+            const safeIcon = esc(safeIconSrc(aspect.icon));
 
             const htmlContent = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
     <title>${safeName} - Aspect Card</title>
     <style>
         body {
@@ -364,7 +403,7 @@ import { newId } from './conversations.js';
 </head>
 <body>
     <div class="card">
-        <img class="icon" src="${aspect.icon || ''}" alt="Aspect Icon">
+        <img class="icon" src="${safeIcon}" alt="Aspect Icon">
         <h1>${safeName}</h1>
         <p class="desc">${safeDesc}</p>
         <div class="details">

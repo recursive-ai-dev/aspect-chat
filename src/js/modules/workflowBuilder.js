@@ -183,7 +183,7 @@ function renderLines() {
     });
 }
 
-document.getElementById('workflow-canvas').addEventListener('mousemove', (e) => {
+document.getElementById('workflow-canvas')?.addEventListener('mousemove', (e) => {
     if (isDragging && dragNode) {
         const canvasRect = document.getElementById('workflow-canvas').getBoundingClientRect();
         dragNode.x = e.clientX - dragOffset.x;

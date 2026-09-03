@@ -94,6 +94,7 @@ export function openSettings() {
     if (el('api-max-context-input')) el('api-max-context-input').value = state.settings.maxContext;
     if (el('remember-key-toggle')) el('remember-key-toggle').checked = state.settings.rememberKey !== false;
     if (el('tool-timeout-input')) el('tool-timeout-input').value = Math.round((state.settings.toolTimeoutMs || 30000) / 1000);
+    if (el('max-knowledge-chars-input')) el('max-knowledge-chars-input').value = state.settings.maxKnowledgeChars || 100000;
 
     const fallbackSelect = el('fallback-provider-select');
     if (fallbackSelect) fallbackSelect.value = state.settings.fallbackProvider || '';
@@ -127,6 +128,11 @@ export function saveSettings() {
         ? timeoutSeconds * 1000
         : 30000;
 
+    const maxKnowledge = parseInt(el('max-knowledge-chars-input')?.value, 10);
+    s.maxKnowledgeChars = Number.isFinite(maxKnowledge) && maxKnowledge > 0
+        ? maxKnowledge
+        : 100000;
+
     const providerSelect = el('api-provider-select');
     if (providerSelect) {
         s.provider = providerSelect.value;
@@ -142,6 +148,7 @@ export function saveSettings() {
     safeSet('model', s.model);
     safeSet('maxContext', String(s.maxContext));
     safeSet('toolTimeoutMs', String(s.toolTimeoutMs));
+    safeSet('maxKnowledgeChars', String(s.maxKnowledgeChars));
     safeSet('rememberKey', String(s.rememberKey));
     safeSet('fallbackProvider', s.fallbackProvider);
     safeSet('fallbackUrl', s.fallbackUrl);

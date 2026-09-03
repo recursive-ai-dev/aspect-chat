@@ -28,8 +28,16 @@ import {
     uploadCreateIcon,
     getGenericIcon,
     getLakesideSageIcon,
-    normalizeAspect
+    normalizeAspect,
+    trustAspectTools
 } from './modules/aspects.js';
+
+import {
+    exportAllAspects,
+    importAllAspects,
+    getSnapshots,
+    restoreSnapshot
+} from './modules/backup.js';
 
 import {
     showEditorView,
@@ -151,7 +159,7 @@ const click = (id) => document.getElementById(id)?.click();
 
 /** Click handlers, keyed by the element's `data-action` value. */
 const ACTIONS = {
-    'open-settings': openSettings,
+    'open-settings': () => { openSettings(); renderSnapshotList(); },
     'save-settings': saveSettings,
     'close-settings': () => document.getElementById('settings-modal').classList.add('hidden'),
     'test-connection': testPrimaryConnection,
@@ -185,7 +193,17 @@ const ACTIONS = {
     'new-conversation': newConversation,
 
     'send': sendMessage,
-    'stop': abortAIRequest
+    'stop': abortAIRequest,
+
+    'trust-tools': trustAspectTools,
+
+    // Storage-error overlay
+    'storage-retry': () => location.reload(),
+    'storage-fresh': () => window.storageStartFresh(),
+
+    // Backup & restore
+    'export-all': exportAllAspects,
+    'import-all': () => click('import-all-input')
 };
 
 function wireDelegatedClicks() {
@@ -214,6 +232,44 @@ function wireDelegatedClicks() {
 function on(id, eventName, handler) {
     const node = document.getElementById(id);
     if (node) node.addEventListener(eventName, handler);
+}
+
+/** Populate the Settings > Backup snapshot list with restore buttons. */
+async function renderSnapshotList() {
+    const list = document.getElementById('snapshot-list');
+    if (!list) return;
+    list.innerHTML = '<div class="snapshot-empty">Loading snapshots…</div>';
+    let snapshots = [];
+    try {
+        snapshots = await getSnapshots();
+    } catch { /* handled below */ }
+
+    list.innerHTML = '';
+    if (!snapshots.length) {
+        list.innerHTML = '<div class="snapshot-empty">No automatic snapshots yet.</div>';
+        return;
+    }
+    snapshots.forEach(s => {
+        const row = document.createElement('div');
+        row.className = 'snapshot-row';
+
+        const label = document.createElement('span');
+        label.className = 'snapshot-label';
+        label.textContent = `${new Date(s.createdAt).toLocaleString()} · ${s.aspectCount} Aspect(s) · ${s.label}`;
+
+        const btn = document.createElement('button');
+        btn.className = 'settings-btn';
+        btn.textContent = 'Restore';
+        btn.onclick = async () => {
+            if (!window.confirm('Replace your current library with this snapshot? A snapshot of the current state is saved first, so this is reversible.')) return;
+            await restoreSnapshot(s.id);
+            renderSnapshotList();
+        };
+
+        row.appendChild(label);
+        row.appendChild(btn);
+        list.appendChild(row);
+    });
 }
 
 function wireInputs() {
@@ -247,6 +303,11 @@ function wireInputs() {
     on('upload-bg-input', 'change', uploadBackground);
     on('upload-knowledge-input', 'change', uploadKnowledgeFiles);
     on('upload-tools-input', 'change', uploadTools);
+    on('import-all-input', 'change', async (e) => {
+        const file = e.target.files && e.target.files[0];
+        e.target.value = '';
+        if (file) await importAllAspects(file);
+    });
 
     // --- Chat
     on('tools-btn', 'click', toggleToolsDropdown);
@@ -268,11 +329,36 @@ function wireInputs() {
  * Ctrl/Cmd based so they never collide with typing.
  */
 function wireShortcuts() {
+    const toolEditorOpen = () => {
+        const m = document.getElementById('tool-editor-modal');
+        return m && !m.classList.contains('hidden');
+    };
+    const typingInField = (target) => {
+        if (!target) return false;
+        if (target.isContentEditable) return true;
+        const tag = (target.tagName || '').toLowerCase();
+        if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+        return !!target.closest('.cm-editor'); // CodeMirror
+    };
+
     document.addEventListener('keydown', (event) => {
         const mod = event.ctrlKey || event.metaKey;
-        if (!mod) return;
+        if (!mod || event.repeat) return;
 
-        switch (event.key.toLowerCase()) {
+        const key = event.key.toLowerCase();
+
+        // Ctrl/Cmd+S inside the tool editor saves the tool, not a .aspect export.
+        if (key === 's' && toolEditorOpen()) {
+            event.preventDefault();
+            saveToolCode();
+            return;
+        }
+
+        // Don't hijack keystrokes while the user is typing, except for the two
+        // that are unambiguous "app chrome" actions (settings, view switch).
+        if (typingInField(event.target) && key !== ',' && key !== 'e') return;
+
+        switch (key) {
             case 'k': // new chat
                 event.preventDefault();
                 newConversation();
@@ -284,6 +370,7 @@ function wireShortcuts() {
             case ',': // settings, matching the platform convention
                 event.preventDefault();
                 openSettings();
+                renderSnapshotList();
                 break;
             case 'e': // jump between chat and editor
                 event.preventDefault();

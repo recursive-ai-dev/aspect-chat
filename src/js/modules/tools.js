@@ -15,11 +15,42 @@ import { getApiEndpoint, buildHeaders } from './providers.js';
 
 export { getApiEndpoint };
 
-export function buildSystemPrompt(aspect, extraFileText) {
+let knowledgeTruncationWarned = false;
+
+/** Test-only: reset the once-per-session truncation warning. */
+export function resetKnowledgeWarningForTesting() {
+    knowledgeTruncationWarned = false;
+}
+
+export function buildSystemPrompt(aspect, extraFileText, maxKnowledgeChars) {
+    const manual = aspect.knowledge || 'None.';
+    let combined = `${manual}${extraFileText || ''}`;
+
+    const cap = Number.isFinite(maxKnowledgeChars) && maxKnowledgeChars > 0
+        ? maxKnowledgeChars
+        : Infinity;
+
+    if (combined.length > cap) {
+        const original = combined.length;
+        combined = combined.slice(0, cap) +
+            `\n\n[Knowledge truncated: ${original.toLocaleString()} characters exceeded the ` +
+            `${cap.toLocaleString()}-character limit. Trim this Aspect's knowledge bank / attached ` +
+            `files, or raise "Max knowledge characters" in API Settings.]`;
+
+        if (!knowledgeTruncationWarned && typeof window !== 'undefined' && typeof window.showToast === 'function') {
+            knowledgeTruncationWarned = true;
+            window.showToast(
+                `This Aspect's knowledge (${original.toLocaleString()} chars) was truncated to fit the ` +
+                `${cap.toLocaleString()}-char limit. Adjust it in the editor or API Settings.`,
+                'error'
+            );
+        }
+    }
+
     return `${aspect.instructions}
 
 # Knowledge Bank
-${aspect.knowledge || 'None.'}${extraFileText}`;
+${combined}`;
 }
 
 export function buildApiMessages(aspect, systemPrompt, extraContext, maxContext) {
@@ -70,14 +101,14 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
          * into the calling Aspect's context. Honours the fallback provider for
          * the same reason the main chat path does.
          */
-        export async function fetchAIResponseForAspect(aspect, prompt) {
+        export async function fetchAIResponseForAspect(aspect, prompt, signal) {
             const primary = primaryTarget(state.settings);
             if (!primary.isWebLLM && !primary.url) {
                 throw new Error("API credentials not configured.");
             }
 
             const extraFileText = await getKnowledgeFilesText(aspect.id);
-            const systemPrompt = buildSystemPrompt(aspect, extraFileText);
+            const systemPrompt = buildSystemPrompt(aspect, extraFileText, state.settings.maxKnowledgeChars);
 
             const apiMessages = [
                 { role: 'system', content: systemPrompt },
@@ -87,11 +118,12 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
             const params = getGenerationParams(aspect);
 
             try {
-                return await completeChat({ target: primary, messages: apiMessages, params });
+                return await completeChat({ target: primary, messages: apiMessages, params, signal });
             } catch (err) {
+                if (err && err.name === 'AbortError') throw err;
                 const secondary = fallbackTarget(state.settings);
                 if (!secondary) throw err;
-                return completeChat({ target: secondary, messages: apiMessages, params });
+                return completeChat({ target: secondary, messages: apiMessages, params, signal });
             }
         }
 
@@ -100,6 +132,15 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
             const tool = aspect.tools.find(t => t.name === toolName);
             if (!tool) {
                 return JSON.stringify({ error: `Tool "${toolName}" not found.` });
+            }
+            // Tools that arrived inside an imported .aspect file are arbitrary
+            // code the user has not seen. They stay inert until the user opens
+            // the editor and explicitly trusts them.
+            if (aspect.toolsReviewed === false) {
+                return JSON.stringify({
+                    error: `The tools on "${aspect.name}" were imported and have not been reviewed. ` +
+                        `Open the editor, read the tool code, then click "Trust & enable tools" before running "${toolName}".`
+                });
             }
             try {
                 let parsedArgs = {};
@@ -200,7 +241,9 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                             }
 
                             try {
-                                const response = await fetchAIResponseForAspect(targetAspect, prompt);
+                                const response = await fetchAIResponseForAspect(
+                                    targetAspect, prompt, state.abortController ? state.abortController.signal : undefined
+                                );
                                 worker.postMessage({ type: 'summonComplete', messageId, response });
                             } catch (err) {
                                 worker.postMessage({ type: 'summonComplete', messageId, error: err.message });
@@ -259,21 +302,53 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
         }
 
 
-        export async function processAIResponseAndTools(aiMessage, aspect) {
+        /**
+         * Parse `[Run Tool: Name({...})]` calls out of a model message.
+         * Kept deliberately separate from any parsing of *tool output*.
+         */
+        export function parseToolCalls(text) {
+            const toolCallRegex = /\[Run Tool:\s*([a-zA-Z0-9_\-\.]+)(?:\((.*?)\))?\s*\]/g;
+            const calls = [];
+            let match;
+            while ((match = toolCallRegex.exec(text || '')) !== null) {
+                calls.push({ fullMatch: match[0], name: match[1], args: match[2] || '' });
+            }
+            return calls;
+        }
+
+        /**
+         * Read an *explicit* chain request from a tool's return value.
+         *
+         * A tool opts in by returning `{ "__aspectToolCalls": [ { "name", "args" } ] }`.
+         * Free-text output is never scanned for `[Run Tool: ...]` — otherwise a
+         * tool that returns a fetched web page (or any other content the model
+         * or a third party can influence) could trigger further tool execution
+         * on its own.
+         */
+        function readChainedToolCalls(resultString) {
+            let parsed;
+            try {
+                parsed = JSON.parse(resultString);
+            } catch {
+                return [];
+            }
+            if (!parsed || !Array.isArray(parsed.__aspectToolCalls)) return [];
+            return parsed.__aspectToolCalls
+                .filter(c => c && typeof c.name === 'string')
+                .map(c => {
+                    const args = typeof c.args === 'string' ? c.args : JSON.stringify(c.args || {});
+                    return { fullMatch: `[Run Tool: ${c.name}(${args})]`, name: c.name, args };
+                });
+        }
+
+        export async function processAIResponseAndTools(aiMessage, aspect, toolCallsOverride = null) {
             if (aiMessage === null || aiMessage === undefined) {
                 aiMessage = "";
             }
-            const toolCallRegex = /\[Run Tool:\s*([a-zA-Z0-9_\-\.]+)(?:\((.*?)\))?\s*\]/g;
-            let match;
-            const toolCalls = [];
-            
-            while ((match = toolCallRegex.exec(aiMessage)) !== null) {
-                toolCalls.push({
-                    fullMatch: match[0],
-                    name: match[1],
-                    args: match[2] || ""
-                });
-            }
+
+            const toolCalls = Array.isArray(toolCallsOverride)
+                ? toolCallsOverride
+                : parseToolCalls(aiMessage);
 
             if (toolCalls.length === 0) {
                 aspect.chatHistory.push({ role: 'assistant', content: aiMessage });
@@ -282,9 +357,13 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                 return;
             }
 
-            aspect.chatHistory.push({ role: 'assistant', content: aiMessage });
-            renderChatMessages();
-            markChangesUnsaved();
+            // Only record a visible assistant turn for a genuine model message;
+            // an internal chained-call batch has no prose to show.
+            if (!toolCallsOverride) {
+                aspect.chatHistory.push({ role: 'assistant', content: aiMessage });
+                renderChatMessages();
+                markChangesUnsaved();
+            }
 
             let toolResultsText = "";
             let newAgenticToolCalls = [];
@@ -295,21 +374,12 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                 updateSystemLog(logId, `🛠️ **Tool Executed:** \`${tc.name}\`\n\n**Result:**\n\`\`\`json\n${result}\n\`\`\``);
                 toolResultsText += `Tool ${tc.name} returned:\n${result}\n\n`;
 
-                // Agentic loop: check if the tool returned an instruction to call another tool
-                let innerMatch;
-                const innerToolCallRegex = /\[Run Tool:\s*([a-zA-Z0-9_\-\.]+)(?:\((.*?)\))?\s*\]/g;
-                while ((innerMatch = innerToolCallRegex.exec(result)) !== null) {
-                    newAgenticToolCalls.push({
-                        fullMatch: innerMatch[0],
-                        name: innerMatch[1],
-                        args: innerMatch[2] || ""
-                    });
-                }
+                newAgenticToolCalls.push(...readChainedToolCalls(result));
             }
 
             if (!state.consecutiveToolRuns) state.consecutiveToolRuns = 0;
             state.consecutiveToolRuns++;
-            
+
             if (state.consecutiveToolRuns > 15) {
                 addSystemLog("⚠️ Loop protection triggered: Maximum of 15 consecutive tool runs reached.");
                 state.consecutiveToolRuns = 0;
@@ -317,10 +387,8 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
             }
 
             if (newAgenticToolCalls.length > 0) {
-                // If tools returned new tools to run, immediately run them by spoofing an AI response containing them
-                let spoofedMessage = newAgenticToolCalls.map(tc => tc.fullMatch).join("\n");
-                addSystemLog("⚡ **Agentic Loop triggered**: Tool requested immediate execution of another tool.");
-                await processAIResponseAndTools(spoofedMessage, aspect);
+                addSystemLog("⚡ **Agentic Loop triggered**: a tool explicitly requested another tool.");
+                await processAIResponseAndTools("", aspect, newAgenticToolCalls);
                 return;
             }
 
@@ -340,16 +408,26 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
             const aspect = getCurrentAspect();
             if (!aspect) return;
 
-            setChatLoadingState(true);
-            state.isGenerating = true;
+            // The agentic tool loop re-enters this function (processAIResponseAndTools
+            // → sendAIRequest) as a continuation. Only the outermost call owns the
+            // generating state, the abort controller, and the teardown — nested
+            // calls must not flip `isGenerating` off mid-turn (which would briefly
+            // re-enable the composer and let the user switch conversations while
+            // messages are still being appended).
+            const outermost = (state.generationDepth || 0) === 0;
+            state.generationDepth = (state.generationDepth || 0) + 1;
+
+            if (outermost) {
+                setChatLoadingState(true);
+                state.isGenerating = true;
+                if (state.abortController) {
+                    state.abortController.abort();
+                }
+                state.abortController = new AbortController();
+            }
+            const signal = state.abortController ? state.abortController.signal : undefined;
 
             const writingId = addSystemLog(`*${aspect.name} is reflecting...*`);
-
-            if (state.abortController) {
-                state.abortController.abort();
-            }
-            state.abortController = new AbortController();
-            const signal = state.abortController.signal;
 
             // Remove the "reflecting" placeholder wherever we leave this function.
             const dropPlaceholder = () => {
@@ -358,8 +436,11 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
             };
 
             try {
+                if (signal && signal.aborted) {
+                    throw new DOMException('Aborted', 'AbortError');
+                }
                 const extraFileText = await getKnowledgeFilesText(aspect.id);
-                const systemPrompt = buildSystemPrompt(aspect, extraFileText);
+                const systemPrompt = buildSystemPrompt(aspect, extraFileText, state.settings.maxKnowledgeChars);
                 const apiMessages = buildApiMessages(aspect, systemPrompt, extraContext, state.settings.maxContext);
                 const params = getGenerationParams(aspect);
 
@@ -403,16 +484,23 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
 
             } catch (error) {
                 dropPlaceholder();
-                if (error.name === 'AbortError' || signal.aborted) {
+                if (error.name === 'AbortError' || (signal && signal.aborted)) {
                     addSystemLog('⚠️ **Generation stopped by user.**');
                 } else {
                     addSystemLog(`❌ **Error:** ${error.message}`);
                 }
             } finally {
-                state.isGenerating = false;
-                setChatLoadingState(false);
+                dropPlaceholder();
+                state.generationDepth = Math.max(0, (state.generationDepth || 1) - 1);
+
+                if (state.generationDepth === 0) {
+                    state.isGenerating = false;
+                    setChatLoadingState(false);
+                    state.abortController = null;
+                    state.consecutiveToolRuns = 0;
+                }
+
                 renderChatMessages();
-                state.abortController = null;
                 touchActiveConversation(aspect);
                 // The conversation's auto-title is derived from its first
                 // message, so the sidebar has to repaint once the exchange
@@ -429,7 +517,14 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
 
             const aspect = getCurrentAspect();
             if (!aspect) return;
-            
+
+            if (state.isGenerating) {
+                if (typeof window !== 'undefined' && window.showToast) {
+                    window.showToast('Wait for the current response to finish, or press Stop.', 'error');
+                }
+                return;
+            }
+
             // Check for @AspectName mention at the beginning
             const summonMatch = text.match(/^@([a-zA-Z0-9_\-]+)\s+(.*)$/s);
             if (summonMatch) {
@@ -439,32 +534,47 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
 
                 if (targetAspect) {
                     aspect.chatHistory.push({ role: 'user', content: text });
+                    input.value = '';
+                    input.style.height = 'auto';
                     renderChatMessages();
                     markChangesUnsaved();
 
                     const logId = addSystemLog(`Summoning \`${targetAspect.name}\`...`);
-                    document.getElementById('send-btn').disabled = true;
 
+                    // A summon is a real generation: show the Stop button and
+                    // give it an abort controller so a slow one can be cancelled.
+                    state.consecutiveToolRuns = 0;
+                    setChatLoadingState(true);
+                    state.isGenerating = true;
+                    if (state.abortController) state.abortController.abort();
+                    state.abortController = new AbortController();
+
+                    let response;
                     try {
-                        const response = await fetchAIResponseForAspect(targetAspect, prompt);
-
-                        updateSystemLog(logId, `✨ **${targetAspect.name} responds:**
-
-${response}`);
-
-                        // Let the current aspect know about this interaction
-                        const extraContext = `User summoned ${targetAspect.name} with prompt: "${prompt}".\n${targetAspect.name} responded: "${response}"`;
-
-                        document.getElementById('send-btn').disabled = false;
-                        input.value = '';
-                        input.style.height = 'auto';
-                        await sendAIRequest(extraContext);
-                        return;
+                        response = await fetchAIResponseForAspect(
+                            targetAspect, prompt, state.abortController.signal
+                        );
                     } catch (err) {
-                        updateSystemLog(logId, `❌ **Failed to summon ${targetAspect.name}:** ${err.message}`);
-                        document.getElementById('send-btn').disabled = false;
+                        const aborted = err && (err.name === 'AbortError' || state.abortController?.signal.aborted);
+                        updateSystemLog(logId, aborted
+                            ? `⚠️ **Summon of ${targetAspect.name} stopped.**`
+                            : `❌ **Failed to summon ${targetAspect.name}:** ${err.message}`);
+                        state.isGenerating = false;
+                        setChatLoadingState(false);
+                        state.abortController = null;
                         return;
                     }
+
+                    updateSystemLog(logId, `✨ **${targetAspect.name} responds:**\n\n${response}`);
+                    const extraContext = `User summoned ${targetAspect.name} with prompt: "${prompt}".\n${targetAspect.name} responded: "${response}"`;
+
+                    // Hand off to the normal generation path, which re-arms its
+                    // own state as the outermost call.
+                    state.isGenerating = false;
+                    setChatLoadingState(false);
+                    state.abortController = null;
+                    await sendAIRequest(extraContext);
+                    return;
                 }
             }
 

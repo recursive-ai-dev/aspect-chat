@@ -47,6 +47,7 @@ export async function init() {
     setValue('api-model-input', s.model);
     setValue('api-max-context-input', s.maxContext);
     setValue('tool-timeout-input', Math.round((s.toolTimeoutMs || 30000) / 1000));
+    setValue('max-knowledge-chars-input', s.maxKnowledgeChars || 100000);
     setValue('fallback-url-input', s.fallbackUrl);
     setValue('fallback-key-input', s.fallbackKey);
     setValue('fallback-model-input', s.fallbackModel);

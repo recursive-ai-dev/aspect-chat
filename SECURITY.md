@@ -41,5 +41,37 @@ release.
 - **Analysis:** user-authored tools run in a Web Worker with no access to `window`, `document`, or the main thread's storage, and communicate only through a narrow `postMessage` protocol (result, memory read/write, aspect summon). They *can* call `fetch`, so a hand-authored tool can perform SSRF from the user's browser. This is inherent to a "run my own local JS tools" feature and is accepted, exactly as for a userscript manager or browser dev tools.
 - **Change in this pass:** the execution timeout is now user-configurable (default 30s, previously a hard-coded 10s that made any network-using tool fail). The ceiling still exists; it is not unbounded.
 
+### 6. [RESOLVED] Imported `.aspect` Tools Ran Without Review
+- **Location:** `src/js/modules/zip.js` (`loadAspectFile`), `src/js/modules/tools.js` (`executeJavaScriptTool`).
+- **Vulnerability Class:** Arbitrary code execution via a shared file.
+- **Original Issue:** `.aspect` files are explicitly meant to be shared. Their tools are JavaScript that runs in a Web Worker with `fetch` access, and the model can invoke them (`[Run Tool: …]`) with no user step in between. An importer who never opens the editor would never see the code before it ran — via `SummonAspect` a hostile tool could also spend the importer's API credits and exfiltrate the reply.
+- **Fix Applied:**
+  - Imported Aspects that carry tools are stored with `toolsReviewed: false`. `executeJavaScriptTool` refuses to run any tool on such an Aspect and returns an explanatory error.
+  - The editor shows a warning banner with a "Trust & enable tools" button (a `confirm()` gate) that sets `toolsReviewed: true`. Locally authored Aspects and older saves default to `true`, so nothing else changes.
+  - `toolsReviewed` is never written into the exported `.aspect`, so the gate re-applies on every machine the file lands on.
+
+### 7. [RESOLVED] Tool Output Could Trigger Further Tool Execution
+- **Location:** `src/js/modules/tools.js` (`processAIResponseAndTools`).
+- **Vulnerability Class:** Prompt-injection → tool execution chain.
+- **Original Issue:** the "agentic loop" scanned the *text* of every tool result for `[Run Tool: …]` and auto-executed any match. A tool that returned a fetched web page (or any attacker-influenced content) could therefore drive further tool calls with no model or user involvement.
+- **Fix Applied:** chaining is now opt-in. A tool must return `{ "__aspectToolCalls": [ { "name", "args" } ] }` for the loop to continue; free-text output is never parsed for tool calls. The 15-iteration cap is unchanged.
+
+### 8. [RESOLVED] A Transient IndexedDB Read Error Could Wipe the Library
+- **Location:** `src/js/modules/persist.js`, `src/js/modules/aspects.js`.
+- **Vulnerability Class:** Silent, total data loss.
+- **Original Issue:** `loadAspects()` returned `[]` on *any* read error. The app could not tell "read failed" from "new user", rebuilt the default library, and the next debounced `saveAspects()` ran its purge step — deleting every real row it had just failed to read.
+- **Fix Applied:**
+  - Persistence is "armed" only after a load that actually succeeds (an empty result still counts as success). A genuine read failure disarms it, and `scheduleSave`/`flushSave` become no-ops until a later load succeeds or the user explicitly chooses "start fresh".
+  - `loadAspects()` now throws on a real failure instead of returning `[]`; `loadDefaultAspects()` shows a blocking overlay (`#storage-error-overlay`) rather than building and persisting defaults.
+  - `saveAspects()` skips its purge step entirely when handed an empty list.
+  - Automatic rolling snapshots of the whole library (`snapshots` object store, newest 8) plus whole-library export/import are available under Settings → Backup & restore.
+  - Covered by `tests/persist.test.js` ("persistence arming after a load failure").
+
+### 9. [RESOLVED] Exported "Aspect Card" HTML Under-escaped; No App CSP
+- **Location:** `src/js/modules/zip.js` (`exportAspectToWebpage`), `index.html` build output.
+- **Fix Applied:**
+  - The exported card now full-entity-escapes every interpolated field, validates the icon is a `data:image/…;base64,` URI before using it as `src`, and carries its own restrictive `Content-Security-Policy` meta.
+  - The built app ships a `Content-Security-Policy` meta (injected by a build-only Vite plugin): `default-src 'self'`, `worker-src 'self' blob:`, `script-src 'self' 'wasm-unsafe-eval' blob:`, `object-src 'none'`, `base-uri 'self'`. `connect-src` stays `*` because the endpoint is user-configured; the dev server is unaffected.
+
 ---
-*Last reviewed as part of the local-models production pass. Re-run this review if the workflow builder gains an import feature, or if any user-supplied HTML is added to the DOM without sanitization.*
+*Last reviewed as part of the daily-driver hardening pass. Re-run this review if the workflow builder gains an import feature, or if any user-supplied HTML is added to the DOM without sanitization.*

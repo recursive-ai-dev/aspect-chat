@@ -11,7 +11,7 @@
  * serialise the whole library on every keystroke.
  */
 
-import { STORE_ASPECTS, withStore, requestToPromise } from './idb.js';
+import { STORE_ASPECTS, STORE_SNAPSHOTS, withStore, requestToPromise } from './idb.js';
 import { normalizeConversations } from './conversations.js';
 
 const LEGACY_KEY = 'aspects_data';
@@ -22,6 +22,35 @@ const SAVE_DEBOUNCE_MS = 400;
 let saveTimer = null;
 let pendingSave = null;
 let lastError = null;
+
+/**
+ * Persistence is "armed" only once we know the store's real contents.
+ *
+ * It starts armed (a fresh browser genuinely has nothing to lose). If a load
+ * ever *fails* — as opposed to coming back empty — it disarms, and every write
+ * becomes a no-op until a load succeeds or the user explicitly opts back in.
+ *
+ * Without this, a one-off IndexedDB read error (disk pressure, a profile lock,
+ * a transient transaction abort) makes `loadAspects()` return `[]`, the app
+ * rebuilds the default library, and the very next debounced save runs its purge
+ * step — deleting every real row we simply could not read. That path is now
+ * impossible: a failed load leaves persistence disarmed.
+ */
+let persistState = 'ready'; // 'ready' | 'failed'
+
+export function getPersistState() {
+    return persistState;
+}
+
+export function isPersistReady() {
+    return persistState === 'ready';
+}
+
+/** Re-enable writes after a load failure (the user chose "start fresh"). */
+export function armPersistence() {
+    persistState = 'ready';
+    lastError = null;
+}
 
 /**
  * Strip runtime-only fields before writing.
@@ -56,7 +85,15 @@ export async function saveAspects(aspects) {
         await withStore(STORE_ASPECTS, 'readwrite', (store) => {
             records.forEach(record => store.put(record));
 
-            // Purge rows for aspects deleted since the last write.
+            // Purge rows for aspects deleted since the last write. Skipped for
+            // an empty save: the app never legitimately drops to zero Aspects
+            // (deleteCurrentAspect blocks the last one), so an empty `records`
+            // here means something upstream is wrong — orphaning a row is
+            // recoverable, wiping the store is not.
+            if (records.length === 0) {
+                console.warn('saveAspects called with no records; skipping purge to avoid a full wipe.');
+                return;
+            }
             const keysRequest = store.getAllKeys();
             keysRequest.onsuccess = () => {
                 keysRequest.result.forEach(key => {
@@ -65,6 +102,7 @@ export async function saveAspects(aspects) {
             };
         });
         lastError = null;
+        maybeWriteSnapshot(aspects, 'auto');
     } catch (err) {
         lastError = err;
         throw err;
@@ -76,6 +114,11 @@ export async function saveAspects(aspects) {
  * write, and callers can await the returned promise to know it landed.
  */
 export function scheduleSave(aspects) {
+    if (persistState !== 'ready') {
+        // A load failed; refuse to write over data we could not read.
+        return Promise.resolve();
+    }
+
     if (saveTimer) clearTimeout(saveTimer);
 
     if (!pendingSave) {
@@ -101,6 +144,7 @@ export function scheduleSave(aspects) {
 
 /** Write any queued changes immediately. */
 export async function flushSave() {
+    if (persistState !== 'ready') return;
     if (!pendingSave) return;
     if (saveTimer) {
         clearTimeout(saveTimer);
@@ -186,8 +230,13 @@ export async function loadAspects() {
 
     try {
         const rows = await readAllAspects();
-        if (!Array.isArray(rows) || rows.length === 0) return [];
-        return rows.map(a => normalizeConversations(a));
+        if (!Array.isArray(rows)) throw new Error('IndexedDB returned a non-array result');
+        persistState = 'ready';
+        if (rows.length === 0) return [];
+        const normalized = rows.map(a => normalizeConversations(a));
+        // A load is a known-consistent state; keep it as a restore point.
+        writeSnapshot(normalized, 'startup');
+        return normalized;
     } catch (err) {
         lastError = err;
         console.error('Failed to load Aspects from IndexedDB', err);
@@ -200,11 +249,19 @@ export async function loadAspects() {
                 && (localStorage.getItem(LEGACY_KEY) || localStorage.getItem(LEGACY_BACKUP_KEY));
             if (raw) {
                 const parsed = JSON.parse(raw);
-                if (Array.isArray(parsed)) return parsed.map(a => normalizeConversations(a));
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    // We recovered real data from the legacy blob — writing it
+                    // back is safe, so stay armed.
+                    persistState = 'ready';
+                    return parsed.map(a => normalizeConversations(a));
+                }
             }
         } catch { /* nothing left to try */ }
 
-        return [];
+        // A genuine read failure with nothing to fall back on. Disarm writes so
+        // the caller cannot rebuild-and-purge, and let it surface the error.
+        persistState = 'failed';
+        throw err instanceof Error ? err : new Error(String(err));
     }
 }
 
@@ -213,10 +270,114 @@ export async function deleteAspectRecord(aspectId) {
     return withStore(STORE_ASPECTS, 'readwrite', (store) => store.delete(aspectId));
 }
 
+/* ------------------------------------------------------------------ *
+ * Rolling snapshots
+ *
+ * A safety net distinct from the user's own .aspect exports: a small,
+ * automatic, timestamped history of the whole library so a bad import, a
+ * mis-click, or a corrupted write is recoverable from within the app. Kept
+ * newest-few only, and throttled so typing does not spawn hundreds.
+ * ------------------------------------------------------------------ */
+
+const MAX_SNAPSHOTS = 8;
+const SNAPSHOT_MIN_INTERVAL_MS = 60_000;
+let lastSnapshotAt = 0;
+
+function snapshotRecords(aspects) {
+    return aspects.map(a => serializeAspect(normalizeConversations(a)));
+}
+
+/** Write a snapshot now, pruning the oldest beyond MAX_SNAPSHOTS. */
+export async function writeSnapshot(aspects, label = 'auto') {
+    if (!Array.isArray(aspects) || aspects.length === 0) return null;
+    const entry = {
+        id: `snap_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+        createdAt: Date.now(),
+        label,
+        aspectCount: aspects.length,
+        aspects: snapshotRecords(aspects)
+    };
+    try {
+        await withStore(STORE_SNAPSHOTS, 'readwrite', (store) => {
+            store.put(entry);
+            // Prune by key: ids are `snap_<base36 timestamp>_<rand>`, so a
+            // lexicographic key sort is chronological. Reading keys (not the
+            // multi-MB bodies) keeps this cheap on the hot save path.
+            const keysReq = store.getAllKeys();
+            keysReq.onsuccess = () => {
+                const keys = (keysReq.result || []).slice().sort();
+                for (let i = 0; i < keys.length - MAX_SNAPSHOTS; i++) {
+                    store.delete(keys[i]);
+                }
+            };
+        });
+        lastSnapshotAt = Date.now();
+        return entry.id;
+    } catch (err) {
+        console.warn('Snapshot write failed', err && err.message);
+        return null;
+    }
+}
+
+/** Throttled snapshot for the hot save path. */
+export function maybeWriteSnapshot(aspects, label = 'auto') {
+    if (persistState !== 'ready') return;
+    if (Date.now() - lastSnapshotAt < SNAPSHOT_MIN_INTERVAL_MS) return;
+    lastSnapshotAt = Date.now(); // reserve the slot before the async work
+    writeSnapshot(aspects, label);
+}
+
+/** Snapshot metadata, newest first (no aspect bodies). */
+export async function listSnapshots() {
+    try {
+        const rows = await withStore(STORE_SNAPSHOTS, 'readonly', (store) => requestToPromise(store.getAll()));
+        return (rows || [])
+            .map(({ id, createdAt, label, aspectCount }) => ({ id, createdAt, label, aspectCount }))
+            .sort((a, b) => b.createdAt - a.createdAt);
+    } catch (err) {
+        console.warn('Could not list snapshots', err && err.message);
+        return [];
+    }
+}
+
+/** Full snapshot by id, normalized and ready to load into state. */
+export async function getSnapshot(id) {
+    const row = await withStore(STORE_SNAPSHOTS, 'readonly', (store) => requestToPromise(store.get(id)));
+    if (!row || !Array.isArray(row.aspects)) return null;
+    return { ...row, aspects: row.aspects.map(a => normalizeConversations(a)) };
+}
+
+/* ------------------------------------------------------------------ *
+ * Whole-library export / import (a single file, every Aspect)
+ * ------------------------------------------------------------------ */
+
+export function serializeLibrary(aspects) {
+    return JSON.stringify({
+        format: 'aspect-studio-library',
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        aspects: snapshotRecords(aspects)
+    }, null, 2);
+}
+
+/** Parse a library file, returning normalized aspects or throwing. */
+export function parseLibrary(text) {
+    const data = JSON.parse(text);
+    const list = Array.isArray(data) ? data : data && data.aspects;
+    if (!Array.isArray(list) || list.length === 0) {
+        throw new Error('No Aspects found in that file.');
+    }
+    return list
+        .filter(a => a && typeof a === 'object')
+        .map(a => normalizeConversations(a));
+}
+
 /** Test-only: clear queued work between cases. */
 export function resetPersistForTesting() {
+    lastSnapshotAt = 0;
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = null;
     pendingSave = null;
     lastError = null;
+    persistState = 'ready';
 }

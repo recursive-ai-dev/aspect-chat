@@ -8,11 +8,12 @@
  */
 
 export const DB_NAME = 'AspectKnowledgeDB';
-export const DB_VERSION = 3;
+export const DB_VERSION = 4;
 
 export const STORE_FILES = 'files';
 export const STORE_MEMORY = 'memory';
 export const STORE_ASPECTS = 'aspects';
+export const STORE_SNAPSHOTS = 'snapshots';
 
 function openDatabase() {
     return new Promise((resolve, reject) => {
@@ -34,6 +35,9 @@ function openDatabase() {
             }
             if (!db.objectStoreNames.contains(STORE_ASPECTS)) {
                 db.createObjectStore(STORE_ASPECTS, { keyPath: 'id' });
+            }
+            if (!db.objectStoreNames.contains(STORE_SNAPSHOTS)) {
+                db.createObjectStore(STORE_SNAPSHOTS, { keyPath: 'id' });
             }
         };
 

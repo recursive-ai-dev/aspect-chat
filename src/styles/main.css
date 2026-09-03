@@ -315,6 +315,106 @@ select {
 @keyframes slideIn { to { transform: translateX(0); } }
 @keyframes slideOut { to { transform: translateX(120%); opacity: 0; } }
 
+/* Toast with an inline action button (e.g. Undo) — lives longer and must be
+   clickable, so it opts back into pointer events and a later slide-out. */
+.toast.has-action {
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    animation: slideIn 0.3s forwards, slideOut 0.3s forwards 7.5s;
+}
+.toast-action {
+    flex: none;
+    background: var(--accent-primary);
+    color: var(--text-on-accent, #fff);
+    border: none;
+    border-radius: 6px;
+    padding: 4px 12px;
+    font-weight: bold;
+    cursor: pointer;
+}
+.toast-action:hover { background: var(--accent-primary-dark); }
+
+/* ------------------------------------------------------------------ *
+ * Storage-error overlay
+ * ------------------------------------------------------------------ */
+.storage-error-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 20000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(20, 14, 10, 0.72);
+}
+.storage-error-card {
+    background: var(--bg-panel-solid);
+    border: 2px solid var(--border-color);
+    border-radius: 12px;
+    box-shadow: var(--shadow-cartoon, 0 10px 30px rgba(0,0,0,0.3));
+    max-width: 520px;
+    padding: 28px 30px;
+    color: var(--text-main);
+}
+.storage-error-card h2 { margin: 0 0 12px; color: var(--danger-text); }
+.storage-error-card p { margin: 0 0 12px; line-height: 1.5; }
+.storage-error-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 18px;
+}
+
+/* ------------------------------------------------------------------ *
+ * Imported-tools review banner
+ * ------------------------------------------------------------------ */
+.tools-review-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    background: #ffcccc;
+    color: #7a1515;
+    border: 1px solid #cc5a5a;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    font-size: 0.9rem;
+}
+.dark-theme .tools-review-banner {
+    background: #4a1919;
+    color: #ffb3b3;
+    border-color: #7a1515;
+}
+.tools-review-banner button { flex: none; }
+
+/* ------------------------------------------------------------------ *
+ * Knowledge-bank total & snapshot list
+ * ------------------------------------------------------------------ */
+.knowledge-total {
+    margin-top: 8px;
+    font-size: 0.82rem;
+    color: var(--text-light, #7c685b);
+}
+.knowledge-total-over { color: var(--danger-text); font-weight: bold; }
+
+.snapshot-list { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.snapshot-empty { font-size: 0.85rem; color: var(--text-light, #7c685b); }
+.snapshot-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 6px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    font-size: 0.82rem;
+}
+.snapshot-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.snapshot-row button { flex: none; }
+
 /* ---------------------------------------------------------------- *
  * Sidebar
  * ---------------------------------------------------------------- */

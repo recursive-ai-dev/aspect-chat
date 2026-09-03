@@ -1,6 +1,7 @@
 import { insertToolTag } from './tools.js';
 import { renderChatMessages } from './chat.js';
-import { getGenericIcon, renderAspectList, getCurrentAspect, updateAspectData } from './aspects.js';
+import { getGenericIcon, renderAspectList, getCurrentAspect, updateAspectData, loadDefaultAspects } from './aspects.js';
+import { armPersistence } from './persist.js';
 import { persistAspects, DEFAULT_PARAMS, getGenerationParams } from './state.js';
 import { systemTools } from './systemTools.js';
 import { state } from './state.js';
@@ -15,18 +16,32 @@ import {
     getActiveConversation
 } from './conversations.js';
 
-export function showToast(message, type = 'info') {
+export function showToast(message, type = 'info', action = null) {
     const container = document.getElementById('toast-container');
     if (!container) return;
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
     toast.innerText = message;
+
+    // An optional inline action button (e.g. "Undo"). Given a longer life so
+    // there is time to click it.
+    let life = 3500;
+    if (action && action.label && typeof action.onClick === 'function') {
+        life = 8000;
+        toast.classList.add('has-action');
+        const btn = document.createElement('button');
+        btn.className = 'toast-action';
+        btn.innerText = action.label;
+        btn.onclick = () => {
+            try { action.onClick(); } finally { toast.remove(); }
+        };
+        toast.appendChild(btn);
+    }
+
     container.appendChild(toast);
     setTimeout(() => {
-        if (toast.parentElement) {
-            toast.remove();
-        }
-    }, 3500); // Wait for animations to finish
+        if (toast.parentElement) toast.remove();
+    }, life); // Wait for animations to finish
 }
 window.showToast = showToast;
 
@@ -45,6 +60,44 @@ export function markChangesUnsaved() {
     if (saveBtn) saveBtn.classList.add('pulsate');
     persistAspects();
 }
+
+/**
+ * Shown when the Aspect library could not be read at startup. Critically, the
+ * app does NOT rebuild-and-persist a default library in this case (that path
+ * would let the debounced save purge the rows we merely failed to read), so
+ * this overlay is the only way forward: retry, or explicitly start fresh.
+ */
+export function showStorageError() {
+    const overlay = document.getElementById('storage-error-overlay');
+    if (overlay) {
+        overlay.classList.remove('hidden');
+        return;
+    }
+    // Overlay markup missing (older index.html) — fall back to a blocking alert.
+    if (typeof window !== 'undefined' && window.alert) {
+        window.alert(
+            'Aspect Studio could not read your saved Aspects from this browser.\n\n' +
+            'Your data has NOT been touched. Reload to try again. If it keeps failing, ' +
+            'your browser storage may be blocked or corrupted.'
+        );
+    }
+}
+window.showStorageError = showStorageError;
+
+/** "Start fresh" from the storage-error overlay: re-arm writes, build a default. */
+export async function storageStartFresh() {
+    if (!window.confirm(
+        'Start with a new, empty library?\n\n' +
+        'If your old Aspects are still in this browser they will be overwritten. ' +
+        'Only do this if you have a backup, or accept losing them.'
+    )) return;
+
+    armPersistence();
+    const overlay = document.getElementById('storage-error-overlay');
+    if (overlay) overlay.classList.add('hidden');
+    await loadDefaultAspects();
+}
+window.storageStartFresh = storageStartFresh;
 
 /** Hide the export reminder until this tab is reloaded. */
 export function dismissSaveReminder() {
@@ -268,11 +321,26 @@ export async function renderKnowledgeFileList() {
     }
 
     list.innerHTML = '';
+
+    const renderTotalRow = () => {
+        const manualChars = (aspect.knowledge || '').length;
+        const fileChars = files.reduce((sum, f) => sum + (f.text || '').length, 0);
+        const total = manualChars + fileChars;
+        const cap = (state.settings && state.settings.maxKnowledgeChars) || 100000;
+        const totalRow = document.createElement('div');
+        totalRow.className = 'knowledge-total' + (total > cap ? ' knowledge-total-over' : '');
+        totalRow.textContent = total > cap
+            ? `Knowledge bank: ${total.toLocaleString()} chars — over the ${cap.toLocaleString()} limit; the excess is trimmed each request.`
+            : `Knowledge bank: ${total.toLocaleString()} / ${cap.toLocaleString()} chars sent per request.`;
+        list.appendChild(totalRow);
+    };
+
     if (!files.length) {
         const empty = document.createElement('div');
         empty.className = 'knowledge-empty';
         empty.innerText = 'No files attached.';
         list.appendChild(empty);
+        renderTotalRow();
         return;
     }
 
@@ -308,6 +376,8 @@ export async function renderKnowledgeFileList() {
         row.appendChild(remove);
         list.appendChild(row);
     });
+
+    renderTotalRow();
 }
 window.renderKnowledgeFileList = renderKnowledgeFileList;
 
@@ -349,6 +419,12 @@ export function showEditorView() {
 
     renderGenerationParams(aspect);
     renderKnowledgeFileList();
+
+    const reviewBanner = document.getElementById('tools-review-banner');
+    if (reviewBanner) {
+        const needsReview = aspect.toolsReviewed === false && Array.isArray(aspect.tools) && aspect.tools.length > 0;
+        reviewBanner.classList.toggle('hidden', !needsReview);
+    }
 
     const toolsList = document.getElementById('tools-list');
     toolsList.innerHTML = '';

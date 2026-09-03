@@ -1,10 +1,23 @@
 import { getCurrentAspect } from './aspects.js';
 
-import * as pdfjsLib from 'pdfjs-dist';
-import * as mammoth from 'mammoth';
 import { getDB } from './idb.js';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mjs', import.meta.url).toString();
+// pdf.js (~350 KB) and mammoth (~250 KB) are only needed when a user attaches a
+// PDF or .docx. Load them on first use so they stay out of the initial bundle.
+let pdfjsPromise = null;
+function loadPdfjs() {
+    if (!pdfjsPromise) {
+        pdfjsPromise = import('pdfjs-dist').then((pdfjsLib) => {
+            pdfjsLib.GlobalWorkerOptions.workerSrc =
+                new URL('pdfjs-dist/build/pdf.worker.mjs', import.meta.url).toString();
+            return pdfjsLib;
+        });
+    }
+    return pdfjsPromise;
+}
+function loadMammoth() {
+    return import('mammoth');
+}
 
         // The database connection (including the Aspect store) lives in idb.js
         // so there is a single schema-upgrade handler for the whole app.
@@ -129,6 +142,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mj
                     if (ext === 'txt' || ext === 'md') {
                         text = await file.text();
                     } else if (ext === 'pdf') {
+                        const pdfjsLib = await loadPdfjs();
                         const arrayBuffer = await file.arrayBuffer();
                         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
                         for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
@@ -138,6 +152,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mj
                             text += pageText + '\n';
                         }
                     } else if (ext === 'docx') {
+                        const mammoth = await loadMammoth();
                         const arrayBuffer = await file.arrayBuffer();
                         const result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
                         text = result.value;

@@ -7,7 +7,20 @@ import { markChangesUnsaved } from './ui.js';
 
 
 export function escapeHtml(str) {
-            return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+            const s = typeof str === 'string' ? str : String(str ?? '');
+            return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+        }
+
+        /**
+         * How close to the bottom the user must be for new content to keep the
+         * view pinned there. Above this, we leave their scroll position alone so
+         * they can read history while a reply streams or after an edit.
+         */
+        const SCROLL_PIN_SLACK_PX = 80;
+        let lastRenderedThreadKey = null;
+
+        function isPinnedToBottom(container) {
+            return container.scrollHeight - container.scrollTop - container.clientHeight <= SCROLL_PIN_SLACK_PX;
         }
 
         export function renderChatMessages() {
@@ -18,6 +31,13 @@ export function escapeHtml(str) {
                 container.innerHTML = '';
                 return;
             }
+
+            // Scroll to the newest message when the user switches Aspect or
+            // conversation; otherwise only if they were already at the bottom.
+            const threadKey = `${aspect.id || '?'}::${aspect.activeConversationId || '?'}`;
+            const threadChanged = threadKey !== lastRenderedThreadKey;
+            lastRenderedThreadKey = threadKey;
+            const shouldStickToBottom = threadChanged || isPinnedToBottom(container);
 
             if (aspect.chatHistory.length === 0) {
                 container.innerHTML = '';
@@ -44,7 +64,7 @@ export function escapeHtml(str) {
             
             aspect.chatHistory.forEach((msg, index) => {
                 const wrapper = container.children[index];
-                const content = msg.content || '';
+                const content = typeof msg.content === 'string' ? msg.content : String(msg.content ?? '');
                 
                 if (msg.role === 'system') {
                     if (wrapper.className !== 'message-wrapper system-log' || wrapper.children.length !== 1 || !wrapper.firstChild || wrapper.firstChild.className !== '') {
@@ -133,37 +153,104 @@ export function escapeHtml(str) {
                     }
                 }
             });
-            container.scrollTop = container.scrollHeight;
+            if (shouldStickToBottom) container.scrollTop = container.scrollHeight;
+        }
+
+        let lastDeleted = null;
+
+        /** Toast + bail when an action is blocked by an in-flight response. */
+        function blockedByGeneration() {
+            if (!state.isGenerating && !state.abortController) return false;
+            if (typeof window !== 'undefined' && window.showToast) {
+                window.showToast('Wait for the current response to finish, or press Stop.', 'error');
+            }
+            return true;
         }
 
         export function deleteMessage(index) {
-            if (state.abortController) return; // Prevent deleting while generating
+            if (blockedByGeneration()) return;
             const aspect = getCurrentAspect();
             if (!aspect || !aspect.chatHistory) return;
-            aspect.chatHistory.splice(index, 1);
+            const [removed] = aspect.chatHistory.splice(index, 1);
+            if (removed) {
+                lastDeleted = { threadKey: `${aspect.id || '?'}::${aspect.activeConversationId || '?'}`, index, message: removed };
+                if (typeof window !== 'undefined' && window.showToast) {
+                    window.showToast('Message deleted.', 'info', { label: 'Undo', onClick: undoDelete });
+                }
+            }
+            markChangesUnsaved();
+            renderChatMessages();
+        }
+
+        function undoDelete() {
+            if (!lastDeleted) return;
+            const aspect = getCurrentAspect();
+            if (!aspect || !aspect.chatHistory) return;
+            const key = `${aspect.id || '?'}::${aspect.activeConversationId || '?'}`;
+            if (key !== lastDeleted.threadKey) return; // user moved on
+            const at = Math.min(lastDeleted.index, aspect.chatHistory.length);
+            aspect.chatHistory.splice(at, 0, lastDeleted.message);
+            lastDeleted = null;
             markChangesUnsaved();
             renderChatMessages();
         }
 
         export async function regenerateMessage(index) {
-            if (state.abortController) return; // Prevent regenerating while already generating
+            if (blockedByGeneration()) return;
             const aspect = getCurrentAspect();
             if (!aspect || !aspect.chatHistory) return;
-            // Delete this message and all subsequent messages
+            // Delete this message and all subsequent messages, keeping a copy so
+            // a failed regeneration can be rolled back rather than lost.
+            const removed = aspect.chatHistory.slice(index);
             aspect.chatHistory.splice(index);
             markChangesUnsaved();
             renderChatMessages();
-            await sendAIRequest();
+            try {
+                await sendAIRequest();
+            } catch (err) {
+                console.error(err);
+            }
+            restoreTailIfNoReply(aspect, index, removed);
+        }
+
+        /**
+         * True when a regeneration/edit starting at `index` ended in a failure
+         * or user-stop (an "❌"/"⚠️" system log and no assistant reply) rather
+         * than a real answer.
+         */
+        function regenerationFailed(aspect, index) {
+            const tail = aspect.chatHistory.slice(index);
+            const gotReply = tail.some(m =>
+                m.role === 'assistant' && (typeof m.content === 'string' ? m.content : '').trim());
+            if (gotReply) return false;
+            return tail.some(m =>
+                m.role === 'system' && /^\s*[❌⚠️]/.test(typeof m.content === 'string' ? m.content : ''));
+        }
+
+        /**
+         * Put back what a failed regeneration/edit removed, so a network error
+         * or a user-stop never silently truncates the conversation.
+         */
+        function restoreTailIfNoReply(aspect, index, removed) {
+            if (!removed || !removed.length) return;
+            if (!regenerationFailed(aspect, index)) return;
+
+            aspect.chatHistory.splice(index, aspect.chatHistory.length - index, ...removed);
+            markChangesUnsaved();
+            renderChatMessages();
+            if (typeof window !== 'undefined' && window.showToast) {
+                window.showToast("That didn't produce a reply — restored the previous messages.", 'error');
+            }
         }
 
         export function editMessage(index) {
-            if (state.abortController) return; // Prevent editing while generating
+            if (blockedByGeneration()) return;
             const aspect = getCurrentAspect();
             if (!aspect || !aspect.chatHistory) return;
-            
+
             const msg = aspect.chatHistory[index];
             if (msg.role !== 'user') return;
-            
+
             msg._isEditing = true;
             renderChatMessages();
         }
@@ -177,22 +264,48 @@ export function escapeHtml(str) {
             renderChatMessages();
         }
 
-        export function submitEdit(index, newContent) {
+        export async function submitEdit(index, newContent) {
             const aspect = getCurrentAspect();
             if (!aspect || !aspect.chatHistory) return;
-            
+
             const msg = aspect.chatHistory[index];
             delete msg._isEditing;
-            
-            if (newContent !== null && newContent.trim() !== '') {
-                // Update content and truncate history after this message
-                msg.content = newContent.trim();
-                aspect.chatHistory.splice(index + 1);
+
+            if (newContent === null || newContent.trim() === '') {
+                renderChatMessages();
+                return;
+            }
+
+            if (blockedByGeneration()) {
+                renderChatMessages();
+                return;
+            }
+
+            // Keep the pre-edit state so a failed regeneration rolls back
+            // instead of leaving a truncated conversation behind.
+            const oldContent = msg.content;
+            const removed = aspect.chatHistory.slice(index + 1);
+
+            msg.content = newContent.trim();
+            aspect.chatHistory.splice(index + 1);
+            markChangesUnsaved();
+            renderChatMessages();
+
+            try {
+                await sendAIRequest();
+            } catch (err) {
+                console.error(err);
+            }
+
+            if (regenerationFailed(aspect, index + 1)) {
+                // Restore the original message text and the messages after it.
+                msg.content = oldContent;
+                aspect.chatHistory.splice(index + 1, aspect.chatHistory.length - (index + 1), ...removed);
                 markChangesUnsaved();
                 renderChatMessages();
-                sendAIRequest().catch(console.error); // auto regenerate
-            } else {
-                renderChatMessages();
+                if (typeof window !== 'undefined' && window.showToast) {
+                    window.showToast("Your edit didn't get a reply — restored the previous message.", 'error');
+                }
             }
         }
 
@@ -223,9 +336,12 @@ export function escapeHtml(str) {
             // throttled. `force` is used for the final chunk, which must always
             // render or the tail of the answer would be dropped.
             if (force || now - lastStreamUpdate > 50) {
-                bubble.innerHTML = DOMPurify.sanitize(marked.parse(content));
                 const container = document.getElementById('chat-messages');
-                if (container) container.scrollTop = container.scrollHeight;
+                const pinned = container ? isPinnedToBottom(container) : false;
+                bubble.innerHTML = DOMPurify.sanitize(marked.parse(content));
+                // Only follow the stream down if the reader was already at the
+                // bottom — never yank them back while they scroll up to re-read.
+                if (container && pinned) container.scrollTop = container.scrollHeight;
                 lastStreamUpdate = now;
             }
         }

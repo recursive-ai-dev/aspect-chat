@@ -1,5 +1,6 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import * as idb from '../src/js/modules/idb.js';
 import { resetDatabaseForTesting, STORE_ASPECTS, withStore, requestToPromise } from '../src/js/modules/idb.js';
 import {
     serializeAspect,
@@ -9,7 +10,10 @@ import {
     flushSave,
     deleteAspectRecord,
     migrateFromLocalStorage,
-    resetPersistForTesting
+    resetPersistForTesting,
+    isPersistReady,
+    getPersistState,
+    armPersistence
 } from '../src/js/modules/persist.js';
 import { normalizeConversations } from '../src/js/modules/conversations.js';
 
@@ -116,6 +120,61 @@ describe('saveAspects / loadAspects', () => {
 
         const rows = await withStore(STORE_ASPECTS, 'readonly', store => requestToPromise(store.getAll()));
         expect(rows.map(r => r.id)).toEqual(['a1']);
+    });
+
+    it('skips the purge on an empty save rather than wiping the store', async () => {
+        await saveAspects([makeAspect(), makeAspect({ id: 'a2', name: 'Second' })]);
+        await saveAspects([]); // must not delete anything
+
+        const rows = await withStore(STORE_ASPECTS, 'readonly', store => requestToPromise(store.getAll()));
+        expect(rows.map(r => r.id).sort()).toEqual(['a1', 'a2']);
+    });
+});
+
+describe('persistence arming after a load failure', () => {
+    beforeEach(freshDatabase);
+
+    it('disarms writes when the library cannot be read, then re-arms on request', async () => {
+        await saveAspects([makeAspect({ id: 'keep', name: 'Keep Me' })]);
+        expect(isPersistReady()).toBe(true);
+
+        // Simulate a transient IndexedDB read failure.
+        const spy = vi.spyOn(idb, 'withStore').mockRejectedValue(new Error('disk go boom'));
+        await expect(loadAspects()).rejects.toThrow('disk go boom');
+        expect(getPersistState()).toBe('failed');
+        expect(isPersistReady()).toBe(false);
+        spy.mockRestore();
+
+        // While disarmed a save must be a no-op — no rebuild-and-purge of the
+        // rows we merely failed to read.
+        await scheduleSave([makeAspect({ id: 'brand-new-default', name: 'Fresh' })]);
+        await flushSave();
+        let rows = await withStore(STORE_ASPECTS, 'readonly', s => requestToPromise(s.getAll()));
+        expect(rows.map(r => r.id)).toEqual(['keep']);
+
+        // Explicit opt-in re-enables writes.
+        armPersistence();
+        expect(isPersistReady()).toBe(true);
+        await scheduleSave([
+            makeAspect({ id: 'keep', name: 'Keep Me' }),
+            makeAspect({ id: 'added', name: 'Added' })
+        ]);
+        await flushSave();
+        rows = await withStore(STORE_ASPECTS, 'readonly', s => requestToPromise(s.getAll()));
+        expect(rows.map(r => r.id).sort()).toEqual(['added', 'keep']);
+    });
+
+    it('stays armed when a read error still finds data in the legacy localStorage blob', async () => {
+        localStorage.setItem('aspects_data', JSON.stringify([{ id: 'legacy', name: 'From Blob', conversations: [] }]));
+        localStorage.removeItem('aspects_migrated_to_idb');
+
+        const spy = vi.spyOn(idb, 'withStore').mockRejectedValue(new Error('read failed'));
+        const loaded = await loadAspects();
+        spy.mockRestore();
+
+        expect(loaded.map(a => a.id)).toEqual(['legacy']);
+        expect(isPersistReady()).toBe(true);
+        localStorage.removeItem('aspects_data');
     });
 });
 
