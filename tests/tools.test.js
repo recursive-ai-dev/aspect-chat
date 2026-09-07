@@ -295,6 +295,12 @@ describe('Tools Module', () => {
     });
 
     describe('sendAIRequest stream handling', () => {
+        // Several tests here replace global.fetch with a hand-rolled stub;
+        // restore the MSW-backed fetch afterwards so later suites still work.
+        let savedFetch;
+        beforeEach(() => { savedFetch = global.fetch; });
+        afterEach(() => { global.fetch = savedFetch; });
+
         it('should handle API errors appropriately', async () => {
             const aspect = { name: 'Aspect 1', chatHistory: [] };
             aspectsModule.getCurrentAspect.mockReturnValue(aspect);
@@ -460,5 +466,82 @@ describe('Tools Module', () => {
             );
             expect(dropdown().classList.contains('show')).toBe(false);
         });
+    });
+});
+
+describe('brokerToolFetch — per-origin network grants (F003)', () => {
+    let confirmSpy;
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        server.use(
+            http.all('https://api.example.com/*', () => HttpResponse.text('OK-api')),
+            http.all('https://attacker.example/*', () => HttpResponse.text('OK-attacker'))
+        );
+        confirmSpy = vi.spyOn(window, 'confirm');
+    });
+
+    afterEach(() => {
+        confirmSpy.mockRestore();
+        server.resetHandlers();
+    });
+
+    const aspect = () => ({ id: 'a1', chatHistory: [] });
+
+    it('prompts once per origin and remembers the approved one', async () => {
+        confirmSpy.mockReturnValue(true);
+        const tool = { name: 't.js', code: 'x', state: {} };
+
+        const r1 = await tools.brokerToolFetch(aspect(), tool, { method: 'GET', url: 'https://api.example.com/a' });
+        expect(r1.ok).toBe(true);
+        expect(tool.allowedOrigins).toEqual(['https://api.example.com']);
+
+        const r2 = await tools.brokerToolFetch(aspect(), tool, { method: 'POST', url: 'https://api.example.com/b' });
+        expect(r2.ok).toBe(true);
+        expect(confirmSpy).toHaveBeenCalledTimes(1); // second call to same origin did not re-prompt
+    });
+
+    it('re-prompts for a different origin even after one was approved', async () => {
+        confirmSpy.mockReturnValue(false);
+        const tool = { name: 't.js', code: 'x', state: {}, allowedOrigins: ['https://api.example.com'] };
+        // api.example.com is already trusted → no prompt
+        await tools.brokerToolFetch(aspect(), tool, { method: 'GET', url: 'https://api.example.com/a' });
+        expect(confirmSpy).not.toHaveBeenCalled();
+
+        // a new origin must ask, and a "no" blocks just that origin
+        const blocked = await tools.brokerToolFetch(aspect(), tool, { method: 'POST', url: 'https://attacker.example/collect' });
+        expect(confirmSpy).toHaveBeenCalledTimes(1);
+        expect(blocked.ok).toBe(false);
+        expect(tool.allowedOrigins).toEqual(['https://api.example.com']);
+    });
+
+    it('allowNetwork === true is an any-origin override', async () => {
+        const tool = { name: 't.js', code: 'x', state: {}, allowNetwork: true };
+        const r = await tools.brokerToolFetch(aspect(), tool, { method: 'GET', url: 'https://attacker.example/x' });
+        expect(r.ok).toBe(true);
+        expect(confirmSpy).not.toHaveBeenCalled();
+    });
+
+    it('allowNetwork === false blocks everything', async () => {
+        const tool = { name: 't.js', code: 'x', state: {}, allowNetwork: false };
+        const r = await tools.brokerToolFetch(aspect(), tool, { method: 'GET', url: 'https://api.example.com/x' });
+        expect(r.ok).toBe(false);
+        expect(confirmSpy).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unparseable URL', async () => {
+        const tool = { name: 't.js', code: 'x', state: {}, allowNetwork: true };
+        const r = await tools.brokerToolFetch(aspect(), tool, { method: 'GET', url: 'https://[' });
+        expect(r.ok).toBe(false);
+        expect(r.error).toMatch(/invalid URL/i);
+    });
+
+    it('writes every outbound request into the transcript', async () => {
+        const a = aspect();
+        const tool = { name: 't.js', code: 'x', state: {}, allowNetwork: true };
+        await tools.brokerToolFetch(a, tool, { method: 'GET', url: 'https://api.example.com/a' });
+        expect(a.chatHistory).toHaveLength(1);
+        expect(a.chatHistory[0].role).toBe('system');
+        expect(a.chatHistory[0].content).toContain('api.example.com');
     });
 });

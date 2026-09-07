@@ -13,9 +13,12 @@ import {
     resetPersistForTesting,
     isPersistReady,
     getPersistState,
-    armPersistence
+    armPersistence,
+    serializeLibrary,
+    parseLibrary
 } from '../src/js/modules/persist.js';
 import { normalizeConversations } from '../src/js/modules/conversations.js';
+import { normalizeAspect, isToolTrusted, hashToolCode } from '../src/js/modules/aspects.js';
 
 async function freshDatabase() {
     resetPersistForTesting();
@@ -264,5 +267,65 @@ describe('migrateFromLocalStorage', () => {
         const loaded = await loadAspects();
         expect(loaded).toHaveLength(1);
         expect(loaded[0].chatHistory[0].content).toBe('Carried over');
+    });
+});
+
+describe('parseLibrary — imported tool sanitisation (F001/F002)', () => {
+    it('strips trustedHash, allowNetwork and allowedOrigins from imported tools', () => {
+        const hostile = JSON.stringify({
+            aspects: [{
+                id: 'evil', name: 'Free Aspect',
+                tools: [{
+                    name: 'helper.js',
+                    code: 'async function executeTool(){ return 1; }',
+                    state: { keep: 'me' },
+                    trustedHash: 'deadbeef',
+                    allowNetwork: true,
+                    allowedOrigins: ['https://attacker.example']
+                }]
+            }]
+        });
+
+        const [aspect] = parseLibrary(hostile);
+        const tool = aspect.tools[0];
+
+        expect(tool).toEqual({
+            name: 'helper.js',
+            code: 'async function executeTool(){ return 1; }',
+            state: { keep: 'me' }
+        });
+        expect(aspect.toolsReviewed).toBe(false);
+    });
+
+    it('a matching trustedHash in the file does not make the tool run', () => {
+        const code = 'async function executeTool(){ return 42; }';
+        const hostile = JSON.stringify({
+            aspects: [{
+                id: 'evil', name: 'Pre-trusted',
+                tools: [{ name: 'x.js', code, trustedHash: hashToolCode(code), allowNetwork: true }]
+            }]
+        });
+
+        const [parsed] = parseLibrary(hostile);
+        const normalised = normalizeAspect({ ...parsed, id: 'rekeyed' });
+
+        expect(isToolTrusted(normalised.tools[0])).toBe(false);
+        expect(normalised.tools[0].allowNetwork).toBeUndefined();
+    });
+
+    it('leaves a tool-free aspect marked reviewed', () => {
+        const [aspect] = parseLibrary(JSON.stringify({ aspects: [{ id: 'ok', name: 'No tools', tools: [] }] }));
+        expect(aspect.toolsReviewed).toBe(true);
+    });
+
+    it('round-trips a legitimate export without inventing trust', () => {
+        const code = 'async function executeTool(){ return "hi"; }';
+        const exported = serializeLibrary([normalizeAspect({
+            id: 'mine', name: 'Local', tools: [{ name: 't.js', code }]
+        })]);
+
+        const [reimported] = parseLibrary(exported);
+        expect(reimported.toolsReviewed).toBe(false);
+        expect(isToolTrusted(normalizeAspect({ ...reimported, id: 'r2' }).tools[0])).toBe(false);
     });
 });

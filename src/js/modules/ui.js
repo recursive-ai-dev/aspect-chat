@@ -450,26 +450,34 @@ export function showEditorView() {
             const btns = document.createElement('div');
             btns.className = 'tool-row-actions';
 
-            // Network permission: undefined = ask on first request, true = allowed,
-            // false = blocked. Click cycles ask → allowed → blocked → ask. This is
-            // the "until you change it" control the first-use prompt refers to.
+            // Network permission: undefined = ask per origin on first request,
+            // true = any origin allowed, false = blocked. Click cycles
+            // ask → allowed → blocked → ask, and always clears the remembered
+            // per-origin allowlist so the choice starts clean. This is the
+            // "until you change it" control the first-use prompt refers to.
             const NET_STATES = [
-                { val: undefined, label: '🌐 Network: ask first', title: 'This tool will prompt the first time it tries to use the network.' },
-                { val: true, label: '🌐 Network: allowed', title: 'This tool may make network requests without prompting.' },
+                { val: undefined, label: '🌐 Network: ask per site', title: 'This tool will prompt the first time it tries to reach each new host.' },
+                { val: true, label: '🌐 Network: any site', title: 'This tool may make network requests to any host without prompting.' },
                 { val: false, label: '🚫 Network: blocked', title: 'This tool cannot make network requests.' }
             ];
             const netBtn = document.createElement('button');
             netBtn.className = 'settings-btn';
             const paintNet = () => {
                 const s = NET_STATES.find(x => x.val === tool.allowNetwork) || NET_STATES[0];
-                netBtn.innerText = s.label;
-                netBtn.title = s.title;
+                const remembered = Array.isArray(tool.allowedOrigins) ? tool.allowedOrigins.length : 0;
+                netBtn.innerText = (s.val === undefined && remembered)
+                    ? `${s.label} (${remembered} allowed)`
+                    : s.label;
+                netBtn.title = (s.val === undefined && remembered)
+                    ? `${s.title}\nAllowed so far: ${tool.allowedOrigins.join(', ')}\nClick to reset.`
+                    : s.title;
             };
             paintNet();
             netBtn.onclick = () => {
                 const i = NET_STATES.findIndex(x => x.val === tool.allowNetwork);
                 tool.allowNetwork = NET_STATES[(i + 1) % NET_STATES.length].val;
                 if (tool.allowNetwork === undefined) delete tool.allowNetwork;
+                delete tool.allowedOrigins;
                 paintNet();
                 markChangesUnsaved();
             };

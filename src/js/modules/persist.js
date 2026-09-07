@@ -360,6 +360,32 @@ export function serializeLibrary(aspects) {
     }, null, 2);
 }
 
+/**
+ * Strip trust- and permission-bearing fields from an imported aspect's tools.
+ *
+ * A library JSON file is arbitrary user-supplied data that the app actively
+ * encourages sharing. `trustedHash` records "the user has read this exact
+ * code"; `allowNetwork` records "the user has let this tool reach the network";
+ * `toolsReviewed` is the coarse editor hint. None of those decisions may be
+ * asserted by the file — they are made on this machine, in the editor. We drop
+ * them, keep only `{ name, code, state }`, and mark the aspect unreviewed
+ * whenever it carries tools, exactly as the `.aspect` import path does
+ * (`zip.js` loadAspectFile → `toolsReviewed: tools.length === 0`).
+ */
+function sanitizeImportedTools(aspect) {
+    if (!aspect || typeof aspect !== 'object') return aspect;
+    const tools = Array.isArray(aspect.tools) ? aspect.tools : [];
+    aspect.tools = tools
+        .filter(t => t && typeof t === 'object')
+        .map(t => ({
+            name: t.name,
+            code: t.code,
+            state: (t.state && typeof t.state === 'object') ? t.state : {}
+        }));
+    aspect.toolsReviewed = aspect.tools.length === 0;
+    return aspect;
+}
+
 /** Parse a library file, returning normalized aspects or throwing. */
 export function parseLibrary(text) {
     const data = JSON.parse(text);
@@ -369,7 +395,7 @@ export function parseLibrary(text) {
     }
     return list
         .filter(a => a && typeof a === 'object')
-        .map(a => normalizeConversations(a));
+        .map(a => normalizeConversations(sanitizeImportedTools(a)));
 }
 
 /** Test-only: clear queued work between cases. */

@@ -34,6 +34,13 @@ function sandboxBootstrap() {
     // per-tool permission. Everything else that can open a socket is removed.
     const netWaiters = new Map();
     let netSeq = 0;
+    // Settle every outstanding brokered fetch when the run ends, so a tool that
+    // started a request it never awaited does not leave a dangling promise in a
+    // frame that is about to be discarded.
+    const rejectPendingFetches = (reason) => {
+        netWaiters.forEach((w) => { try { w.reject(new TypeError(reason)); } catch (_e) { /* already settled */ } });
+        netWaiters.clear();
+    };
     self.fetch = (input, init) => {
         init = init || {};
         const url = typeof input === 'string' ? input : (input && input.url);
@@ -68,6 +75,11 @@ function sandboxBootstrap() {
         const d = e && e.data;
         if (!d || d.channel !== channel) return;
 
+        if (d.type === 'teardown') {
+            rejectPendingFetches('Tool sandbox was torn down before this request completed.');
+            return;
+        }
+
         if (d.type === 'net-result') {
             const w = netWaiters.get(d.id);
             if (!w) return;
@@ -98,8 +110,10 @@ function sandboxBootstrap() {
                 throw new Error("Function executeTool(args, state) is not defined in this script.");
             }
             const result = await fn(d.args, d.state);
+            rejectPendingFetches('Tool run finished before this request completed.');
             send({ type: 'done', ok: true, result, state: d.state });
         } catch (err) {
+            rejectPendingFetches('Tool run failed before this request completed.');
             send({ type: 'done', ok: false, error: (err && err.message) || String(err) });
         }
     });
@@ -121,8 +135,16 @@ function buildSrcdoc(channel, toolCode) {
         `</body></html>`;
 }
 
-const randomChannel = () =>
-    'ch_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+const randomChannel = () => {
+    const c = (typeof globalThis !== 'undefined' && globalThis.crypto) || null;
+    if (c && typeof c.randomUUID === 'function') return 'ch_' + c.randomUUID();
+    if (c && typeof c.getRandomValues === 'function') {
+        const b = new Uint8Array(16);
+        c.getRandomValues(b);
+        return 'ch_' + Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+    }
+    return 'ch_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+};
 
 /**
  * @param {object}   opts
@@ -155,7 +177,12 @@ export function runSandboxedTool(opts) {
             if (timer) clearTimeout(timer);
             window.removeEventListener('message', onMessage);
             if (onAbort && signal) signal.removeEventListener('abort', onAbort);
-            if (iframe && iframe.parentNode) iframe.parentNode.removeChild(iframe);
+            if (iframe) {
+                // Give the bootstrap a chance to reject any in-flight brokered
+                // fetch before its context is destroyed.
+                try { post({ type: 'teardown' }); } catch (_e) { /* frame already gone */ }
+                if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+            }
             iframe = null;
         };
         const finish = (fn, val) => {

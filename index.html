@@ -2,6 +2,15 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <!--
+      Baseline Content-Security-Policy for when index.html is served directly
+      (a plain static server, no `vite build`). It is a deliberate superset:
+      script/style/connect are left open so `npm run dev` HMR still works, but
+      object-src, base-uri, frame-src and form-action are locked down as a
+      backstop for the DOMPurify sink and the tool sandbox. The production
+      build (vite.config.js) REPLACES this tag with the full strict policy.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="object-src 'none'; base-uri 'self'; frame-src 'self'; form-action 'none'">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="light dark">
     <title>Aspect Studio - AI Persona Workshop</title>

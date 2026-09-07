@@ -242,30 +242,83 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
             }
         }
 
+        /** The scheme+host of a URL, or null if it will not parse. */
+        function requestOrigin(url) {
+            try {
+                return new URL(String(url), (typeof location !== 'undefined' && location.href) || undefined).origin;
+            } catch {
+                return null;
+            }
+        }
+
+        /**
+         * Append a one-line system-log entry recording a tool's outbound
+         * request, so every network call a tool makes is visible in the
+         * transcript rather than happening silently. Best-effort: a logging
+         * failure must never block or break the request itself.
+         */
+        function logToolNetwork(aspect, toolName, req, note) {
+            try {
+                const safeName = String(toolName).replace(/[^a-zA-Z0-9_\-.]/g, '').slice(0, 64) || 'tool';
+                const url = String(req && req.url || '').slice(0, 300).replace(/`{1,}/g, '');
+                const method = String(req && req.method || 'GET').replace(/[^A-Z]/gi, '').slice(0, 10) || 'GET';
+                const line = `🌐 **Tool network${note ? ` (${note})` : ''}:** \`${safeName}\` → ${method} ${url}`;
+                if (aspect && Array.isArray(aspect.chatHistory)) {
+                    aspect.chatHistory.push({
+                        id: Date.now().toString() + Math.random().toString(),
+                        role: 'system',
+                        content: line
+                    });
+                    if (typeof renderChatMessages === 'function') renderChatMessages();
+                }
+            } catch (_e) { /* logging is never load-bearing */ }
+        }
+
         /**
          * Network broker for sandboxed tools. The sandbox itself has
-         * `connect-src 'none'`; every request comes here. A tool gets network
-         * access only after the user says yes once — the answer is stored on
-         * the tool (`allowNetwork`) and stays until changed in the editor.
+         * `connect-src 'none'`; every request comes here.
+         *
+         * The grant is scoped to an origin, not to the tool as a whole. A tool
+         * that was allowed to reach `https://api.example.com` still prompts the
+         * first time it tries a different origin, so an innocuous-looking first
+         * request cannot silently license later exfiltration to an attacker
+         * host. `tool.allowNetwork === true` set explicitly in the editor is the
+         * one deliberate "any origin" override; `false` blocks everything.
+         * Every request that goes out is written into the transcript.
          */
         export async function brokerToolFetch(aspect, tool, req) {
-            if (tool.allowNetwork === undefined) {
+            if (tool.allowNetwork === false) {
+                return { ok: false, error: `Network access is disabled for the tool "${tool.name}".` };
+            }
+
+            const origin = requestOrigin(req.url);
+            if (!origin) {
+                return { ok: false, error: `The tool "${tool.name}" requested an invalid URL.` };
+            }
+
+            const allowed = Array.isArray(tool.allowedOrigins) ? tool.allowedOrigins : [];
+            const originOk = tool.allowNetwork === true || allowed.includes(origin);
+
+            if (!originOk) {
                 const ask = (typeof window !== 'undefined' && window.confirm)
                     ? window.confirm.bind(window)
                     : () => false;
                 const granted = ask(
                     `The tool "${tool.name}" wants to make a network request:\n\n` +
                     `  ${req.method} ${req.url}\n\n` +
-                    `Allow this tool to access the network? It can then send data anywhere. ` +
-                    `This choice is remembered until you change it in the tool editor.`
+                    `Allow this tool to reach ${origin}? Once allowed, it can send any data ` +
+                    `to that host. Other hosts will ask again. This choice is remembered ` +
+                    `until you change it in the tool editor.`
                 );
-                tool.allowNetwork = !!granted;
+                if (!granted) {
+                    logToolNetwork(aspect, tool.name, req, 'blocked');
+                    return { ok: false, error: `Network access to ${origin} was denied for the tool "${tool.name}".` };
+                }
+                tool.allowedOrigins = allowed.concat(origin);
                 markChangesUnsaved();
             }
 
-            if (!tool.allowNetwork) {
-                return { ok: false, error: `Network access is disabled for the tool "${tool.name}".` };
-            }
+            logToolNetwork(aspect, tool.name, req);
 
             try {
                 const resp = await fetch(req.url, {

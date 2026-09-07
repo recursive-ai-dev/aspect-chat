@@ -238,13 +238,13 @@ export function saveWorkflowAsTool() {
 
         if (currentNode.type === 'fetch') {
             const urlVal = document.getElementById(`config_${currentNode.id}_url`).value;
-            compiledCode += `\n    try {\n        const url = "${urlVal}" || currentData.url || currentData;\n        const resp = await fetch(url);\n        currentData = await resp.text();\n    } catch (e) {\n        return { error: 'Fetch failed: ' + e.message };\n    }\n`;
+            compiledCode += `\n    try {\n        const url = ${JSON.stringify(urlVal)} || currentData.url || currentData;\n        const resp = await fetch(url);\n        currentData = await resp.text();\n    } catch (e) {\n        return { error: 'Fetch failed: ' + e.message };\n    }\n`;
         } else if (currentNode.type === 'extract') {
-            const regexVal = document.getElementById(`config_${currentNode.id}_regex`).value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-            compiledCode += `\n    try {\n        const rgx = new RegExp("${regexVal}");\n        const m = currentData.match(rgx);\n        currentData = m ? m[1] || m[0] : null;\n    } catch (e) {\n        return { error: 'Extraction failed: ' + e.message };\n    }\n`;
+            const regexVal = document.getElementById(`config_${currentNode.id}_regex`).value;
+            compiledCode += `\n    try {\n        const rgx = new RegExp(${JSON.stringify(regexVal)});\n        const m = currentData.match(rgx);\n        currentData = m ? m[1] || m[0] : null;\n    } catch (e) {\n        return { error: 'Extraction failed: ' + e.message };\n    }\n`;
         } else if (currentNode.type === 'memory') {
             const keyVal = document.getElementById(`config_${currentNode.id}_key`).value;
-            compiledCode += `\n    try {\n        const key = "${keyVal}";\n        await new Promise((resolve) => {\n            const messageId = Date.now().toString() + Math.random();\n            const listener = (e) => {\n                if (e.data.type === 'memoryWriteComplete' && e.data.messageId === messageId) {\n                    self.removeEventListener('message', listener);\n                    resolve();\n                }\n            };\n            self.addEventListener('message', listener);\n            self.postMessage({ type: 'writeMemory', key: key, value: currentData, messageId: messageId });\n        });\n    } catch (e) {\n        return { error: 'Memory save failed: ' + e.message };\n    }\n`;
+            compiledCode += `\n    try {\n        const key = ${JSON.stringify(keyVal)};\n        await new Promise((resolve) => {\n            const messageId = Date.now().toString() + Math.random();\n            const listener = (e) => {\n                if (e.data.type === 'memoryWriteComplete' && e.data.messageId === messageId) {\n                    self.removeEventListener('message', listener);\n                    resolve();\n                }\n            };\n            self.addEventListener('message', listener);\n            self.postMessage({ type: 'writeMemory', key: key, value: currentData, messageId: messageId });\n        });\n    } catch (e) {\n        return { error: 'Memory save failed: ' + e.message };\n    }\n`;
         } else if (currentNode.type === 'custom') {
             const codeVal = document.getElementById(`config_${currentNode.id}_code`).value;
             compiledCode += `\n    try {\n        const customFn = async (input) => {\n            ${codeVal}\n        };\n        currentData = await customFn(currentData);\n    } catch (e) {\n        return { error: 'Custom JS failed: ' + e.message };\n    }\n`;
@@ -273,7 +273,9 @@ export function saveWorkflowAsTool() {
         }
 
         markChangesUnsaved();
-        showToast(`Workflow saved as ${toolName}!`);
+        // Compiled workflow tools are saved without a trustedHash, so like any
+        // freshly added tool they stay inert until reviewed and enabled.
+        showToast(`Saved "${toolName}". Open it in the tool editor and enable it before it can run.`);
         closeWorkflowModal();
     }
 }

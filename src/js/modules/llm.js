@@ -67,7 +67,10 @@ export async function readSSEStream(reader, onDelta) {
         for (const line of lines) consumeLine(line);
     }
 
-    // Flush a final line that arrived without a trailing newline.
+    // Flush any bytes the decoder is still holding (a final chunk that ended
+    // mid–multibyte sequence, e.g. an emoji as the last token), then the
+    // trailing line if it arrived without a newline.
+    pending += decoder.decode();
     if (pending) consumeLine(pending);
 
     return full;

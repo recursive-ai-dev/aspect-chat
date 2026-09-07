@@ -110,4 +110,31 @@ describe('runSandboxedTool', () => {
             _createFrame: makeFakeFrame(behaviour)
         })).rejects.toThrow(/aborted/);
     });
+
+    it('uses an unpredictable crypto channel id (F004)', async () => {
+        let html;
+        const behaviour = (msg, reply, channel) => {
+            if (msg.type === 'init') reply({ channel, type: 'done', ok: true, result: 1, state: {} });
+        };
+        const create = makeFakeFrame(behaviour);
+        await runSandboxedTool({
+            code: 'x', args: {}, state: {},
+            _createFrame: (h) => { html = h; return create(h); }
+        });
+        const channel = (html.match(/const channel = '([^']+)'/) || [])[1];
+        expect(channel).toMatch(/^ch_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    });
+
+    it('signals the frame to tear down before discarding it (F005)', async () => {
+        const posted = [];
+        const behaviour = (msg, reply, channel) => {
+            posted.push(msg.type);
+            if (msg.type === 'init') reply({ channel, type: 'done', ok: true, result: 1, state: {} });
+        };
+        await runSandboxedTool({
+            code: 'x', args: {}, state: {}, _createFrame: makeFakeFrame(behaviour)
+        });
+        await Promise.resolve();
+        expect(posted).toContain('teardown');
+    });
 });

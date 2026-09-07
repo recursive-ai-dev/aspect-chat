@@ -1,11 +1,13 @@
 import { defineConfig } from 'vite';
 
 /**
- * Inject a Content-Security-Policy meta tag into the built index.html.
+ * Swap the baseline Content-Security-Policy meta in index.html for the strict
+ * production policy (or inject it if the baseline tag is absent).
  *
  * Build-only: Vite's dev server relies on inline scripts and eval for HMR, so a
- * strict CSP there would break `npm run dev`. In production the app is fully
- * bundled and self-hosted, so it can lock down hard.
+ * strict CSP there would break `npm run dev`. index.html ships a permissive
+ * baseline for the served-directly case; here we replace it so the built app
+ * locks down hard and never carries two competing CSP tags.
  *
  * `connect-src *` is intentional and unavoidable: the whole point of Aspect
  * Studio is talking to whatever OpenAI-compatible endpoint the user configures
@@ -30,14 +32,16 @@ function cspPlugin() {
         // <meta> CSP. Set it via an HTTP header at the hosting layer if needed.
     ].join('; ');
 
+    const strictTag = `<meta http-equiv="Content-Security-Policy" content="${csp}">`;
+    const existing = /<meta[^>]+http-equiv=["']Content-Security-Policy["'][^>]*>/i;
+
     return {
         name: 'inject-csp-meta',
         apply: 'build',
         transformIndexHtml(html) {
-            return html.replace(
-                '<head>',
-                `<head>\n    <meta http-equiv="Content-Security-Policy" content="${csp}">`
-            );
+            return existing.test(html)
+                ? html.replace(existing, strictTag)
+                : html.replace('<head>', `<head>\n    ${strictTag}`);
         }
     };
 }
