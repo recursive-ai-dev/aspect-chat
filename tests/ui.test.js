@@ -18,7 +18,8 @@ vi.mock('../src/js/modules/db.js', () => ({
     deleteKnowledgeFile: vi.fn().mockResolvedValue(undefined)
 }));
 
-vi.mock('../src/js/modules/aspects.js', () => ({
+vi.mock('../src/js/modules/aspects.js', async (orig) => ({
+    ...(await orig()),
     getCurrentAspect: vi.fn(),
     getGenericIcon: vi.fn().mockReturnValue('generic-icon.png'),
     renderAspectList: vi.fn(),

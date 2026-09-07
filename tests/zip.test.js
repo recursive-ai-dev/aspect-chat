@@ -21,20 +21,13 @@ vi.mock('jszip', () => {
     return { default: mockJSZip };
 });
 
-vi.mock('../src/js/modules/aspects.js', async () => {
-    // normalizeAspect is real: import must produce a fully-formed Aspect,
-    // and these tests assert on the shape it guarantees.
-    const { normalizeConversations } = await import('../src/js/modules/conversations.js');
-    return {
-        getCurrentAspect: vi.fn(),
-        renderAspectList: vi.fn(),
-        normalizeAspect: vi.fn((aspect) => {
-            if (!aspect.memory) aspect.memory = {};
-            if (!Array.isArray(aspect.tools)) aspect.tools = [];
-            return normalizeConversations(aspect);
-        })
-    };
-});
+vi.mock('../src/js/modules/aspects.js', async (orig) => ({
+    // normalizeAspect / sanitizeToolName / hash helpers are real: import must
+    // produce a fully-formed Aspect and these tests assert on that shape.
+    ...(await orig()),
+    getCurrentAspect: vi.fn(),
+    renderAspectList: vi.fn(),
+}));
 
 vi.mock('../src/js/modules/state.js', () => ({
     markChangesSaved: vi.fn(),

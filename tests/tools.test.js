@@ -6,11 +6,20 @@ import { server } from './mocks/server.js';
 import * as tools from '../src/js/modules/tools.js';
 import { state } from '../src/js/modules/state.js';
 import * as aspectsModule from '../src/js/modules/aspects.js';
+import { hashToolCode } from '../src/js/modules/aspects.js';
 import * as uiModule from '../src/js/modules/ui.js';
 import * as chatModule from '../src/js/modules/chat.js';
 import * as dbModule from '../src/js/modules/db.js';
 
-vi.mock('../src/js/modules/aspects.js', () => ({
+/** Tool fixture whose trustedHash matches its code, so the per-tool gate runs it. */
+const trustedTool = (name, code, extra = {}) => ({ name, code, state: {}, trustedHash: hashToolCode(code), ...extra });
+
+vi.mock('../src/js/modules/toolSandbox.js', async () => ({
+    runSandboxedTool: (await import('./helpers/fakeToolSandbox.js')).fakeRunSandboxedTool,
+}));
+
+vi.mock('../src/js/modules/aspects.js', async (orig) => ({
+    ...(await orig()),
     getCurrentAspect: vi.fn(),
 }));
 
@@ -107,37 +116,29 @@ describe('Tools Module', () => {
         });
     });
 
-    describe('executeJavaScriptTool worker source', () => {
-        it('should build valid worker source even when tool code contains backticks', async () => {
+    describe('executeJavaScriptTool', () => {
+        it('runs a tool whose code contains template literals, and passes parsed args', async () => {
             const aspect = {
                 id: 'current',
+                toolsReviewed: true,
                 chatHistory: [],
-                tools: [{ name: 't', code: 'async function executeTool(args, state) { const msg = `hi ${args.x}`; return msg; }' }]
+                tools: [trustedTool('t', 'async function executeTool(args, state) { return `hi ${args.x}`; }')]
             };
             state.currentAspectId = 'current';
             aspectsModule.getCurrentAspect.mockReturnValue(aspect);
 
-            const RealBlob = global.Blob;
-            let capturedCode = null;
-            global.Blob = class { constructor(parts) { capturedCode = parts.join(''); } };
-            global.URL.createObjectURL = vi.fn().mockReturnValue('mock-url');
-            global.URL.revokeObjectURL = vi.fn();
-            global.Worker = class Worker {
-                constructor() {}
-                postMessage() { this.onmessage({ data: { success: true, result: 'ok', state: {} } }); }
-                terminate() {}
-            };
-
             const result = await tools.executeJavaScriptTool('t', '{"x":"there"}');
+            expect(result).toBe('hi there');
+        });
 
-            global.Blob = RealBlob;
-            delete global.URL.createObjectURL;
-            delete global.URL.revokeObjectURL;
-            delete global.Worker;
-
-            expect(result).toContain('ok');
-            expect(capturedCode).toContain('`hi ${args.x}`');
-            expect(() => new Function(capturedCode)).not.toThrow();
+        it('surfaces a runtime error from the tool without throwing', async () => {
+            const aspect = {
+                id: 'current', toolsReviewed: true, chatHistory: [],
+                tools: [trustedTool('boom', 'async function executeTool() { throw new Error("kaboom"); }')]
+            };
+            aspectsModule.getCurrentAspect.mockReturnValue(aspect);
+            const result = await tools.executeJavaScriptTool('boom', '{}');
+            expect(result).toContain('kaboom');
         });
     });
 
@@ -152,6 +153,27 @@ describe('Tools Module', () => {
             
             expect(input.value).toBe('Hello [Run Tool: myTool]');
             expect(dropdown.classList.contains('show')).toBe(false);
+        });
+    });
+
+    describe('formatToolResultLog', () => {
+        it('breaks backtick runs so a tool result cannot close the json fence', () => {
+            const out = tools.formatToolResultLog('Evil.js', '```\ninjected markdown\n```');
+            // Only the template's own ```json open + ``` close survive as real
+            // fences; the body's backtick run is defused with a zero-width space.
+            expect((out.match(/`{3}/g) || []).length).toBe(2);
+            expect(out).toContain('`\u200B`\u200B`');
+        });
+
+        it('strips disallowed characters from the tool name', () => {
+            const out = tools.formatToolResultLog('../../evil name!', '{}');
+            expect(out).toContain('`....evilname`');
+        });
+
+        it('caps a flood of output', () => {
+            const out = tools.formatToolResultLog('Big.js', 'x'.repeat(20000));
+            expect(out).toMatch(/truncated [\d,]+ characters/);
+            expect(out.length).toBeLessThan(9000);
         });
     });
 
@@ -251,7 +273,7 @@ describe('Tools Module', () => {
         });
 
         it('should process user tool calls', async () => {
-            const aspect = { chatHistory: [], tools: [{name: 'myTool', code: 'return 42'}] };
+            const aspect = { chatHistory: [], tools: [trustedTool('myTool', 'async function executeTool() { return 42; }')] };
             aspectsModule.getCurrentAspect.mockReturnValue(aspect);
             document.getElementById('chat-input').value = 'Testing [Run Tool: myTool]';
             
@@ -264,24 +286,9 @@ describe('Tools Module', () => {
                     return HttpResponse.json({ choices: [{ message: { content: 'AI Response' } }] });
                 })
             );
-            // Because internal calls cannot be spied easily in ES modules without dependency injection,
-            // we will just let it run and mock the Worker globally
-            global.Worker = class Worker {
-                constructor() {
-                    this.postMessage = (data) => {
-                        this.onmessage({ data: { success: true, result: '42', state: {} } });
-                    };
-                    this.terminate = vi.fn();
-                }
-            };
-            global.URL.createObjectURL = vi.fn().mockReturnValue('mock-url');
-            global.URL.revokeObjectURL = vi.fn();
-
+            // Tool execution is sandboxed via toolSandbox.js, mocked at the top
+            // of this file to run the tool code directly.
             await tools.sendMessage();
-
-            delete global.Worker;
-            delete global.URL.createObjectURL;
-            delete global.URL.revokeObjectURL;
 
             expect(fetchCalled).toBe(true);
         });

@@ -348,6 +348,58 @@ async function executeTool(args, state) {
          * Normalising once here means the rest of the app can assume every
          * field exists rather than guarding at each use.
          */
+        /** System-tool filenames an imported tool must not be allowed to claim. */
+        export const RESERVED_TOOL_NAMES = [
+            'Calculator.js', 'Weather.js', 'DateTime.js',
+            'ReadMemory.js', 'WriteMemory.js', 'SummonAspect.js'
+        ];
+
+        /**
+         * Fast non-cryptographic hash (FNV-1a) of a tool's source. Not a defence
+         * against a collision-crafting attacker — there is nothing to collide
+         * against; it is only a marker for "this exact code was reviewed". When
+         * the code changes, the hash no longer matches and the tool goes inert
+         * until the user opens it in the editor again.
+         */
+        export function hashToolCode(code) {
+            const s = String(code == null ? '' : code);
+            let h = 0x811c9dc5;
+            for (let i = 0; i < s.length; i++) {
+                h ^= s.charCodeAt(i);
+                h = Math.imul(h, 0x01000193);
+            }
+            return (h >>> 0).toString(16);
+        }
+
+        /** A tool may run only if its current code matches the reviewed hash. */
+        export function isToolTrusted(tool) {
+            return !!tool && typeof tool.code === 'string' &&
+                tool.trustedHash === hashToolCode(tool.code);
+        }
+
+        /** Mark every tool on the Aspect as reviewed at its current code. */
+        export function trustAllTools(aspect) {
+            (aspect.tools || []).forEach(t => { t.trustedHash = hashToolCode(t.code); });
+            aspect.toolsReviewed = true;
+        }
+
+        export function aspectHasUntrustedTools(aspect) {
+            return Array.isArray(aspect.tools) && aspect.tools.some(t => !isToolTrusted(t));
+        }
+
+        /**
+         * Force a tool filename to the charset the `[Run Tool: …]` caller accepts
+         * (`A-Za-z0-9_-.`), cap its length, and guarantee a `.js` suffix. Applied
+         * on import (names come from a zip path) and on save (free-text input).
+         */
+        export function sanitizeToolName(raw) {
+            let n = String(raw == null ? '' : raw).replace(/[^A-Za-z0-9_\-.]/g, '').replace(/^\.+/, '');
+            n = n.slice(0, 64);
+            if (!n || /^\.js$/i.test(n)) n = 'tool';
+            if (!/\.js$/i.test(n)) n += '.js';
+            return n;
+        }
+
         export function normalizeAspect(aspect) {
             if (!aspect || typeof aspect !== 'object') return aspect;
 
@@ -360,15 +412,23 @@ async function executeTool(args, state) {
             if (!aspect.memory || typeof aspect.memory !== 'object') aspect.memory = {};
             if (!aspect.params || typeof aspect.params !== 'object') aspect.params = {};
 
-            // Tools are trusted by default (the user authored them here, or an
-            // older save predates this flag). Only .aspect import sets it false,
-            // which gates execution until the user reviews the code.
-            if (aspect.toolsReviewed === undefined) {
-                aspect.toolsReviewed = true;
-            }
+            // Trust is now per-tool, keyed by a hash of the tool's code
+            // (`tool.trustedHash`). `aspect.toolsReviewed` is kept only as a
+            // coarse hint for the editor banner.
+            //   - undefined toolsReviewed  → legacy hand-authored Aspect: the
+            //     tools were already trusted under the old model, so grandfather
+            //     each one in at its current code.
+            //   - toolsReviewed === false  → imported, not yet reviewed: leave
+            //     trustedHash unset so every tool stays inert until reviewed.
+            //   - a tool that already carries a matching trustedHash is left be.
+            const grandfather = aspect.toolsReviewed !== false;
+            if (aspect.toolsReviewed === undefined) aspect.toolsReviewed = true;
 
             aspect.tools.forEach(tool => {
                 if (!tool.state || typeof tool.state !== 'object') tool.state = {};
+                if (grandfather && tool.trustedHash === undefined && typeof tool.code === 'string') {
+                    tool.trustedHash = hashToolCode(tool.code);
+                }
             });
 
             return normalizeConversations(aspect);
@@ -652,10 +712,11 @@ async function executeTool(args, state) {
             if (!window.confirm(
                 `Enable ${aspect.tools.length} tool(s) on "${aspect.name}"?\n\n` +
                 `These were imported from an .aspect file. They run JavaScript in a ` +
-                `sandboxed worker and can make network requests. Only enable them if ` +
-                `you have reviewed the code and trust its source.`
+                `sandboxed iframe that can't see your data; network access stays off ` +
+                `for each tool until you grant it. Only enable them if you have ` +
+                `reviewed the code and trust its source.`
             )) return;
-            aspect.toolsReviewed = true;
+            trustAllTools(aspect);
             markChangesUnsaved();
             if (typeof window.showEditorView === 'function') window.showEditorView();
             if (typeof window.showToast === 'function') window.showToast('Tools enabled for this Aspect.');

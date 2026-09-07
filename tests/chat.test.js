@@ -22,6 +22,35 @@ describe('escapeHtml', () => {
     });
 });
 
+describe('renderMarkdown hardening', () => {
+    it('strips data-* attributes so injected [data-action] cannot reach the click delegate', () => {
+        const html = chatModule.renderMarkdown('<a href="#" data-action="storage-fresh">x</a>');
+        expect(html).not.toMatch(/data-action/);
+    });
+
+    it('drops style and id attributes (clickjack overlay / id shadowing)', () => {
+        const html = chatModule.renderMarkdown('<a href="#" style="position:fixed;inset:0" id="send-btn">x</a>');
+        expect(html).not.toMatch(/style=/);
+        expect(html).not.toMatch(/id=/);
+    });
+
+    it('removes form controls', () => {
+        const html = chatModule.renderMarkdown('<button>go</button><input><textarea></textarea>');
+        expect(html).not.toMatch(/<button|<input|<textarea/i);
+    });
+
+    it('forces links to open out-of-frame with rel=noopener', () => {
+        const html = chatModule.renderMarkdown('[x](https://example.com)');
+        expect(html).toMatch(/rel="noopener noreferrer"/);
+        expect(html).toMatch(/target="_blank"/);
+    });
+
+    it('still drops javascript: URLs', () => {
+        const html = chatModule.renderMarkdown('<a href="javascript:alert(1)">x</a>');
+        expect(html).not.toMatch(/javascript:/i);
+    });
+});
+
 describe('editMessage, cancelEdit, submitEdit', () => {
     beforeEach(() => {
         document.body.innerHTML = '<div id="chat-messages"></div>';

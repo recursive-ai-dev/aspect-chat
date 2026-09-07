@@ -1,7 +1,7 @@
 import { renderChatMessages, createStreamingBubble, updateStreamingBubble } from './chat.js';
 import { getKnowledgeFilesText, saveMemory } from './db.js';
 import { markChangesUnsaved, setChatLoadingState, renderConversationList } from './ui.js';
-import { getCurrentAspect } from './aspects.js';
+import { getCurrentAspect, isToolTrusted } from './aspects.js';
 import { state, getGenerationParams } from './state.js';
 import { touchActiveConversation } from './conversations.js';
 import {
@@ -13,6 +13,7 @@ import {
     readSSEStream
 } from './llm.js';
 import { getApiEndpoint, buildHeaders } from './providers.js';
+import { runSandboxedTool } from './toolSandbox.js';
 
 export { getApiEndpoint };
 
@@ -134,147 +135,181 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
             if (!tool) {
                 return JSON.stringify({ error: `Tool "${toolName}" not found.` });
             }
-            // Tools that arrived inside an imported .aspect file are arbitrary
-            // code the user has not seen. They stay inert until the user opens
-            // the editor and explicitly trusts them.
-            if (aspect.toolsReviewed === false) {
+            // Trust is per tool, keyed by a hash of its code: an imported tool,
+            // or one whose code changed since it was reviewed, stays inert until
+            // the user opens it in the editor and enables it.
+            if (!isToolTrusted(tool)) {
                 return JSON.stringify({
-                    error: `The tools on "${aspect.name}" were imported and have not been reviewed. ` +
-                        `Open the editor, read the tool code, then click "Trust & enable tools" before running "${toolName}".`
+                    error: `The tool "${toolName}" has not been reviewed (or its code changed since it was). ` +
+                        `Open it in the editor, read the code, then enable it before running it.`
                 });
             }
             try {
                 let parsedArgs = {};
-                if (argStr && argStr.trim()) {
+                const trimmed = argStr && argStr.trim();
+                if (trimmed) {
                     try {
-                        parsedArgs = JSON.parse(argStr.trim());
-                    } catch {
-                        parsedArgs = argStr.trim();
+                        parsedArgs = JSON.parse(trimmed);
+                    } catch (e) {
+                        // A bare string is a valid argument for tools that want
+                        // one. But something that clearly *meant* to be JSON and
+                        // failed should come back as an error the model can fix,
+                        // not be passed through half-parsed.
+                        if (/^[{[]/.test(trimmed)) {
+                            return JSON.stringify({
+                                error: `Could not parse the arguments to "${toolName}" as JSON: ${e.message}. ` +
+                                    `Send valid JSON, e.g. [Run Tool: ${toolName}({"key":"value"})].`
+                            });
+                        }
+                        parsedArgs = trimmed;
                     }
                 }
-                
-                // Construct safe asynchronous wrapper using Web Worker to sandbox execution
-                const workerCode = [
-                    "self.onmessage = async function(e) {",
-                    "    if (!e || !e.data) return;",
-                    "    if (e.data.type === 'memoryWriteComplete') return; // Handled by tool listener",
-                    "    if (e.data.type === 'summonComplete') return; // Handled by tool listener",
-                    "    const { args, state, memory } = e.data;",
-                    "    self.aspectMemory = memory;",
-                    "    try {",
-                    tool.code,
-                    "        if (typeof executeTool === 'function') {",
-                    "            const result = await executeTool(args, state);",
-                    "            self.postMessage({ success: true, result, state });",
-                    "        } else {",
-                    "            self.postMessage({ success: false, error: \"Function executeTool(args, state) is not defined in this script. Ensure you have 'async function executeTool(args, state) { ... }' in your tool.\" });",
-                    "        }",
-                    "    } catch (err) {",
-                    "        self.postMessage({ success: false, error: err.message });",
-                    "    }",
-                    "};"
-                ].join('\n');
-                const blob = new Blob([workerCode], { type: 'application/javascript' });
-                const workerUrl = URL.createObjectURL(blob);
-                const worker = new Worker(workerUrl);
-                
-                // Initialize tool.state if it doesn't exist
+
                 if (!tool.state) tool.state = {};
-                
-                const result = await new Promise((resolve, reject) => {
-                    let timeoutId;
-                    let onAbort;
 
-                    const cleanup = () => {
-                        if (timeoutId) clearTimeout(timeoutId);
-                        if (onAbort && state.abortController) {
-                            state.abortController.signal.removeEventListener('abort', onAbort);
-                        }
-                    };
+                const timeoutMs = Number.isFinite(state.settings.toolTimeoutMs) && state.settings.toolTimeoutMs > 0
+                    ? state.settings.toolTimeoutMs
+                    : 30000;
 
-                    // 10s was too short for tools that make network calls
-                    // (the FetchWebsite template routinely exceeded it).
-                    const timeoutMs = Number.isFinite(state.settings.toolTimeoutMs) && state.settings.toolTimeoutMs > 0
-                        ? state.settings.toolTimeoutMs
-                        : 30000;
-                    timeoutId = setTimeout(() => {
-                        worker.terminate();
-                        URL.revokeObjectURL(workerUrl);
-                        cleanup();
-                        reject(new Error(`Tool execution timed out after ${Math.round(timeoutMs / 1000)} seconds.`));
-                    }, timeoutMs);
-
-                    onAbort = () => {
-                        worker.terminate();
-                        URL.revokeObjectURL(workerUrl);
-                        cleanup();
-                        reject(new Error("Tool execution aborted."));
-                    };
-
-                    if (state.abortController) {
-                        state.abortController.signal.addEventListener('abort', onAbort);
-                    }
-
-                    worker.onmessage = async (e) => {
-                        if (!e || !e.data) return;
-
-                        if (e.data.type === 'writeMemory') {
-                            (async () => {
-                                try {
-                                    if (!aspect.memory) aspect.memory = {};
-                                    aspect.memory[e.data.key] = e.data.value;
-                                    await saveMemory(aspect.id, aspect.memory);
-                                    worker.postMessage({ type: 'memoryWriteComplete', messageId: e.data.messageId });
-                                } catch (err) {
-                                    console.error("Failed to save aspect memory", err);
-                                    worker.postMessage({ type: 'memoryWriteComplete', messageId: e.data.messageId, error: err.message });
-                                }
-                            })();
-                            return; // Keep worker alive for the final result
-                        }
-
-                        if (e.data.type === 'summonAspect') {
-                            const { aspectName, prompt, messageId } = e.data;
-                            const targetAspect = state.aspects.find(a => a.name.toLowerCase() === aspectName.toLowerCase());
-                            if (!targetAspect) {
-                                worker.postMessage({ type: 'summonComplete', messageId, error: `Aspect '${aspectName}' not found.` });
-                                return;
-                            }
-
-                            try {
-                                const response = await fetchAIResponseForAspect(
-                                    targetAspect, prompt, state.abortController ? state.abortController.signal : undefined
-                                );
-                                worker.postMessage({ type: 'summonComplete', messageId, response });
-                            } catch (err) {
-                                worker.postMessage({ type: 'summonComplete', messageId, error: err.message });
-                            }
-                            return; // Keep worker alive
-                        }
-
-                        cleanup();
-                        if (e.data.success) {
-                            tool.state = e.data.state; // Update state
-                            markChangesUnsaved();
-                            resolve(e.data.result);
-                        } else {
-                            reject(new Error(e.data.error || "Unknown tool execution error"));
-                        }
-                        worker.terminate();
-                        URL.revokeObjectURL(workerUrl);
-                    };
-                    worker.onerror = (err) => {
-                        cleanup();
-                        reject(new Error(err.message || "Worker execution failed due to a syntax or runtime error."));
-                        worker.terminate();
-                        URL.revokeObjectURL(workerUrl);
-                    };
-                    worker.postMessage({ args: parsedArgs, state: tool.state, memory: aspect.memory || {} });
+                const { result, state: nextState } = await runSandboxedTool({
+                    code: tool.code,
+                    args: parsedArgs,
+                    state: tool.state,
+                    memory: aspect.memory || {},
+                    timeoutMs,
+                    signal: state.abortController ? state.abortController.signal : undefined,
+                    onPrivileged: (msg, post) => handlePrivilegedToolMessage(aspect, msg, post),
+                    onNetwork: (req) => brokerToolFetch(aspect, tool, req)
                 });
+
+                // The sandbox mutates a structured-clone copy of state; adopt it,
+                // but refuse a runaway blob (persisted to IndexedDB and baked
+                // into every .aspect export).
+                if (nextState && typeof nextState === 'object') {
+                    let size = 0;
+                    try { size = JSON.stringify(nextState).length; } catch { size = Infinity; }
+                    if (size > MAX_TOOL_STATE_CHARS) {
+                        return JSON.stringify({
+                            error: `"${toolName}" tried to persist ${size.toLocaleString()} characters of state; ` +
+                                `the limit is ${MAX_TOOL_STATE_CHARS.toLocaleString()}. State was not saved.`
+                        });
+                    }
+                    tool.state = nextState;
+                }
+                markChangesUnsaved();
                 return typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result);
             } catch (err) {
                 return JSON.stringify({ error: `Runtime error in ${toolName}: ${err.message}` });
             }
+        }
+
+        const MAX_TOOL_STATE_CHARS = 256 * 1024;
+
+        /**
+         * Relay a system-tool's privileged request (WriteMemory / SummonAspect)
+         * to the main thread and post the matching *-Complete reply back into
+         * the sandbox. `post` targets the sandbox frame for this run only.
+         */
+        async function handlePrivilegedToolMessage(aspect, msg, post) {
+            if (msg.type === 'writeMemory') {
+                try {
+                    if (!aspect.memory) aspect.memory = {};
+                    aspect.memory[msg.key] = msg.value;
+                    await saveMemory(aspect.id, aspect.memory);
+                    post({ type: 'memoryWriteComplete', messageId: msg.messageId });
+                } catch (err) {
+                    console.error('Failed to save aspect memory', err);
+                    post({ type: 'memoryWriteComplete', messageId: msg.messageId, error: err.message });
+                }
+                return;
+            }
+
+            if (msg.type === 'summonAspect') {
+                const { aspectName, prompt, messageId } = msg;
+                const targetAspect = state.aspects.find(a => a.name.toLowerCase() === String(aspectName).toLowerCase());
+                if (!targetAspect) {
+                    post({ type: 'summonComplete', messageId, error: `Aspect '${aspectName}' not found.` });
+                    return;
+                }
+                try {
+                    const response = await fetchAIResponseForAspect(
+                        targetAspect, prompt, state.abortController ? state.abortController.signal : undefined
+                    );
+                    post({ type: 'summonComplete', messageId, response });
+                } catch (err) {
+                    post({ type: 'summonComplete', messageId, error: err.message });
+                }
+            }
+        }
+
+        /**
+         * Network broker for sandboxed tools. The sandbox itself has
+         * `connect-src 'none'`; every request comes here. A tool gets network
+         * access only after the user says yes once — the answer is stored on
+         * the tool (`allowNetwork`) and stays until changed in the editor.
+         */
+        export async function brokerToolFetch(aspect, tool, req) {
+            if (tool.allowNetwork === undefined) {
+                const ask = (typeof window !== 'undefined' && window.confirm)
+                    ? window.confirm.bind(window)
+                    : () => false;
+                const granted = ask(
+                    `The tool "${tool.name}" wants to make a network request:\n\n` +
+                    `  ${req.method} ${req.url}\n\n` +
+                    `Allow this tool to access the network? It can then send data anywhere. ` +
+                    `This choice is remembered until you change it in the tool editor.`
+                );
+                tool.allowNetwork = !!granted;
+                markChangesUnsaved();
+            }
+
+            if (!tool.allowNetwork) {
+                return { ok: false, error: `Network access is disabled for the tool "${tool.name}".` };
+            }
+
+            try {
+                const resp = await fetch(req.url, {
+                    method: req.method || 'GET',
+                    headers: req.headers || undefined,
+                    body: req.body
+                });
+                const body = await resp.text();
+                return {
+                    ok: true,
+                    status: resp.status,
+                    statusText: resp.statusText,
+                    headers: Object.fromEntries(resp.headers.entries()),
+                    body
+                };
+            } catch (err) {
+                return { ok: false, error: (err && err.message) || String(err) };
+            }
+        }
+
+        /**
+         * Build the Markdown for a "tool executed" system-log entry.
+         *
+         * `result` is the tool's raw return value — attacker-controlled for an
+         * imported tool, and influenced by fetched web content for a benign one.
+         * It is rendered through the chat Markdown pipeline, so:
+         *   - runs of 3+ backticks are broken with a zero-width space so the
+         *     value can't close the ```json fence and inject its own Markdown;
+         *   - the tool name is stripped to the charset the caller regex allows;
+         *   - the value is length-capped so a tool can't flood the transcript.
+         * `renderMarkdown` is still the real security boundary (no data-*, no
+         * style/id, no form controls); this just keeps the log well-formed.
+         */
+        const TOOL_LOG_RESULT_CAP = 8000;
+        export function formatToolResultLog(toolName, result, { userTriggered = false } = {}) {
+            const safeName = String(toolName).replace(/[^a-zA-Z0-9_\-.]/g, '').slice(0, 64) || 'tool';
+            let body = typeof result === 'string' ? result : String(result ?? '');
+            if (body.length > TOOL_LOG_RESULT_CAP) {
+                body = body.slice(0, TOOL_LOG_RESULT_CAP) +
+                    `\n… [truncated ${(body.length - TOOL_LOG_RESULT_CAP).toLocaleString()} characters]`;
+            }
+            body = body.replace(/`{3,}/g, m => m.split('').join('\u200B'));
+            const label = userTriggered ? 'User-Triggered Tool' : 'Tool Executed';
+            return `🛠️ **${label}:** \`${safeName}\`\n\n**Result:**\n\`\`\`json\n${body}\n\`\`\``;
         }
 
         export function insertToolTag(toolName) {
@@ -303,18 +338,62 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
         }
 
 
+        /** Longest call string we'll pull out of one `[Run Tool: …]` tag. */
+        const MAX_TOOL_CALL_LEN = 20000;
+
         /**
          * Parse `[Run Tool: Name({...})]` calls out of a model message.
+         *
+         * The old regex used `\((.*?)\)`, which stopped at the first `)` — so
+         * any JSON arg containing `)`, `]`, or a newline was silently truncated.
+         * This walks the `(...)` with a brace/bracket/string-aware scanner so a
+         * well-formed argument object survives intact.
          * Kept deliberately separate from any parsing of *tool output*.
          */
         export function parseToolCalls(text) {
-            const toolCallRegex = /\[Run Tool:\s*([a-zA-Z0-9_\-\.]+)(?:\((.*?)\))?\s*\]/g;
+            const src = String(text || '');
             const calls = [];
-            let match;
-            while ((match = toolCallRegex.exec(text || '')) !== null) {
-                calls.push({ fullMatch: match[0], name: match[1], args: match[2] || '' });
+            const head = /\[Run Tool:\s*([a-zA-Z0-9_\-.]+)\s*/g;
+            let m;
+            while ((m = head.exec(src)) !== null) {
+                const name = m[1];
+                let i = head.lastIndex;
+                let args = '';
+                if (src[i] === '(') {
+                    const end = scanBalanced(src, i);
+                    if (end === -1) continue;            // unterminated — skip this tag
+                    args = src.slice(i + 1, end).trim();
+                    i = end + 1;
+                }
+                // allow whitespace then the closing ']'
+                while (i < src.length && /\s/.test(src[i])) i++;
+                if (src[i] !== ']') continue;
+                if (args.length > MAX_TOOL_CALL_LEN) args = args.slice(0, MAX_TOOL_CALL_LEN);
+                calls.push({ fullMatch: src.slice(m.index, i + 1), name, args });
+                head.lastIndex = i + 1;
             }
             return calls;
+        }
+
+        /** Index of the `)` that closes the `(` at `open`, or -1. String-aware. */
+        function scanBalanced(s, open) {
+            let depth = 0;
+            let quote = null;
+            for (let i = open; i < s.length && i < open + MAX_TOOL_CALL_LEN; i++) {
+                const c = s[i];
+                if (quote) {
+                    if (c === '\\') { i++; continue; }
+                    if (c === quote) quote = null;
+                    continue;
+                }
+                if (c === '"' || c === "'" || c === '`') { quote = c; continue; }
+                if (c === '(' || c === '[' || c === '{') depth++;
+                else if (c === ')' || c === ']' || c === '}') {
+                    depth--;
+                    if (depth === 0) return i;
+                }
+            }
+            return -1;
         }
 
         /**
@@ -342,12 +421,19 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                 });
         }
 
+        // Bounds on one tool-using turn. The old code only counted consecutive
+        // runs (checked *after* a whole batch); a single model message could
+        // still emit hundreds of `[Run Tool: …]` tags and every one would run.
+        const MAX_TOOL_CALLS_PER_MESSAGE = 8;
+        const MAX_CONSECUTIVE_TOOL_RUNS = 15;
+        const MAX_TOOL_TURN_MS = 120000;
+
         export async function processAIResponseAndTools(aiMessage, aspect, toolCallsOverride = null) {
             if (aiMessage === null || aiMessage === undefined) {
                 aiMessage = "";
             }
 
-            const toolCalls = Array.isArray(toolCallsOverride)
+            let toolCalls = Array.isArray(toolCallsOverride)
                 ? toolCallsOverride
                 : parseToolCalls(aiMessage);
 
@@ -366,23 +452,35 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                 markChangesUnsaved();
             }
 
+            if (toolCalls.length > MAX_TOOL_CALLS_PER_MESSAGE) {
+                addSystemLog(`⚠️ Only the first ${MAX_TOOL_CALLS_PER_MESSAGE} of ${toolCalls.length} tool calls in this message were run.`);
+                toolCalls = toolCalls.slice(0, MAX_TOOL_CALLS_PER_MESSAGE);
+            }
+
+            if (!state.consecutiveToolRuns) {
+                state.consecutiveToolRuns = 0;
+                state.toolTurnStartedAt = Date.now();
+            }
+
             let toolResultsText = "";
             let newAgenticToolCalls = [];
 
             for (let tc of toolCalls) {
                 const logId = addSystemLog(`Executing tool \`${tc.name}\`...`);
                 const result = await executeJavaScriptTool(tc.name, tc.args);
-                updateSystemLog(logId, `🛠️ **Tool Executed:** \`${tc.name}\`\n\n**Result:**\n\`\`\`json\n${result}\n\`\`\``);
+                updateSystemLog(logId, formatToolResultLog(tc.name, result));
                 toolResultsText += `Tool ${tc.name} returned:\n${result}\n\n`;
 
                 newAgenticToolCalls.push(...readChainedToolCalls(result));
             }
 
-            if (!state.consecutiveToolRuns) state.consecutiveToolRuns = 0;
             state.consecutiveToolRuns++;
 
-            if (state.consecutiveToolRuns > 15) {
-                addSystemLog("⚠️ Loop protection triggered: Maximum of 15 consecutive tool runs reached.");
+            const elapsed = Date.now() - (state.toolTurnStartedAt || Date.now());
+            if (state.consecutiveToolRuns > MAX_CONSECUTIVE_TOOL_RUNS || elapsed > MAX_TOOL_TURN_MS) {
+                addSystemLog(elapsed > MAX_TOOL_TURN_MS
+                    ? `⚠️ Loop protection: tool activity exceeded ${Math.round(MAX_TOOL_TURN_MS / 1000)}s for this turn.`
+                    : `⚠️ Loop protection: reached ${MAX_CONSECUTIVE_TOOL_RUNS} consecutive tool runs.`);
                 state.consecutiveToolRuns = 0;
                 return;
             }
@@ -601,24 +699,14 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
 
             state.consecutiveToolRuns = 0;
 
-            const toolCallRegex = /\[Run Tool:\s*([a-zA-Z0-9_\-\.]+)(?:\((.*?)\))?\s*\]/g;
-            let match;
             let userToolResults = "";
-            const userToolCalls = [];
-            
-            while ((match = toolCallRegex.exec(text)) !== null) {
-                userToolCalls.push({
-                    fullMatch: match[0],
-                    name: match[1],
-                    args: match[2] || ""
-                });
-            }
+            const userToolCalls = parseToolCalls(text).slice(0, MAX_TOOL_CALLS_PER_MESSAGE);
 
             if (userToolCalls.length > 0) {
                 for (let tc of userToolCalls) {
                     const logId = addSystemLog(`Executing user-triggered tool \`${tc.name}\`...`);
                     const result = await executeJavaScriptTool(tc.name, tc.args);
-                    updateSystemLog(logId, `🛠️ **User-Triggered Tool:** \`${tc.name}\`\n\n**Result:**\n\`\`\`json\n${result}\n\`\`\``);
+                    updateSystemLog(logId, formatToolResultLog(tc.name, result, { userTriggered: true }));
                     userToolResults += `User executed tool ${tc.name} which returned:\n${result}\n\n`;
                 }
             }

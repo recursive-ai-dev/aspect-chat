@@ -12,6 +12,47 @@ export function escapeHtml(str) {
         }
 
         /**
+         * Render model / tool Markdown to sanitised HTML.
+         *
+         * Hardened beyond DOMPurify's defaults because the input is adversarial:
+         * a prompt-injected model, or an imported tool's return value, controls
+         * this string. Two defaults are the problem —
+         *
+         *  - `data-*` attributes: the app wires every button through a
+         *    document-level `click` delegate keyed on `[data-action]`
+         *    (see main.js). Left enabled, `<a data-action="storage-fresh">` in a
+         *    chat bubble turns any stray click into a privileged app action.
+         *  - `style` / `id`: a full-viewport `position:fixed` overlay is a
+         *    one-click clickjack; a duplicated `id` can shadow a real control.
+         *
+         * Links are forced to open in a new tab with `rel=noopener` so injected
+         * markup can't navigate the app frame away.
+         */
+        const MARKDOWN_SANITIZE_CONFIG = {
+            USE_PROFILES: { html: true },
+            ALLOW_DATA_ATTR: false,
+            FORBID_TAGS: ['style', 'form', 'input', 'button', 'select', 'option', 'textarea'],
+            FORBID_ATTR: ['style', 'id']
+        };
+
+        let sanitizeHookInstalled = false;
+        function installSanitizeHook() {
+            if (sanitizeHookInstalled || typeof DOMPurify.addHook !== 'function') return;
+            DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+                if (node.tagName === 'A' && node.hasAttribute('href')) {
+                    node.setAttribute('target', '_blank');
+                    node.setAttribute('rel', 'noopener noreferrer');
+                }
+            });
+            sanitizeHookInstalled = true;
+        }
+
+        export function renderMarkdown(content) {
+            installSanitizeHook();
+            return DOMPurify.sanitize(marked.parse(content), MARKDOWN_SANITIZE_CONFIG);
+        }
+
+        /**
          * How close to the bottom the user must be for new content to keep the
          * view pinned there. Above this, we leave their scroll position alone so
          * they can read history while a reply streams or after an edit.
@@ -73,7 +114,7 @@ export function escapeHtml(str) {
                     }
                     const bubble = wrapper.firstChild;
                     if (msg._renderedHtml === undefined || msg._renderedContent !== content) {
-                        msg._renderedHtml = DOMPurify.sanitize(marked.parse(content));
+                        msg._renderedHtml = renderMarkdown(content);
                         msg._renderedContent = content;
                     }
                     if (bubble.innerHTML !== msg._renderedHtml) {
@@ -122,7 +163,7 @@ export function escapeHtml(str) {
 
                         // Escape user input, render and sanitize assistant output (memoized per content)
                         if (msg._renderedHtml === undefined || msg._renderedContent !== content) {
-                            msg._renderedHtml = msg.role === 'user' ? escapeHtml(content) : DOMPurify.sanitize(marked.parse(content));
+                            msg._renderedHtml = msg.role === 'user' ? escapeHtml(content) : renderMarkdown(content);
                             msg._renderedContent = content;
                         }
                         if (bubble.innerHTML !== msg._renderedHtml) {
@@ -338,7 +379,7 @@ export function escapeHtml(str) {
             if (force || now - lastStreamUpdate > 50) {
                 const container = document.getElementById('chat-messages');
                 const pinned = container ? isPinnedToBottom(container) : false;
-                bubble.innerHTML = DOMPurify.sanitize(marked.parse(content));
+                bubble.innerHTML = renderMarkdown(content);
                 // Only follow the stream down if the reader was already at the
                 // bottom — never yank them back while they scroll up to re-read.
                 if (container && pinned) container.scrollTop = container.scrollHeight;

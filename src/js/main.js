@@ -214,7 +214,12 @@ const ACTIONS = {
 function wireDelegatedClicks() {
     document.addEventListener('click', (event) => {
         const trigger = event.target.closest('[data-action]');
-        if (trigger) {
+        // Only honour `data-action` on the app's own chrome. Chat bubbles render
+        // sanitised model / tool Markdown; without this gate an injected
+        // `<a data-action="...">` in a reply would fire a privileged action on
+        // any click. `renderMarkdown` also strips `data-*`, so this is the
+        // second of two independent barriers.
+        if (trigger && !trigger.closest('#chat-messages, .message-wrapper')) {
             const handler = ACTIONS[trigger.dataset.action];
             if (handler) {
                 event.preventDefault();
@@ -227,7 +232,7 @@ function wireDelegatedClicks() {
         }
 
         const nodeButton = event.target.closest('[data-workflow-node]');
-        if (nodeButton) {
+        if (nodeButton && !nodeButton.closest('#chat-messages, .message-wrapper')) {
             window.addWorkflowNode(nodeButton.dataset.workflowNode);
         }
     });

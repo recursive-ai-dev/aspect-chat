@@ -1,5 +1,5 @@
 import { state } from "./state.js";
-import { getCurrentAspect } from "./aspects.js";
+import { getCurrentAspect, sanitizeToolName, hashToolCode } from "./aspects.js";
 import { showEditorView, markChangesUnsaved } from "./ui.js";
 
 // CodeMirror is ~300 KB. Load it only when the tool editor is actually opened
@@ -110,14 +110,16 @@ export function saveToolCode() {
         window.showToast("Tool name is required.", "error");
         return;
     }
-    
-    const finalName = name.endsWith('.js') ? name : name + '.js';
+
+    const finalName = sanitizeToolName(name);
+    // Saving from the editor means the user has seen this exact code, so it is
+    // trusted at this hash (see isToolTrusted in aspects.js).
+    const trustedHash = hashToolCode(code);
 
     if (currentEditingToolIndex >= 0) {
-        aspect.tools[currentEditingToolIndex].name = finalName;
-        aspect.tools[currentEditingToolIndex].code = code;
+        Object.assign(aspect.tools[currentEditingToolIndex], { name: finalName, code, trustedHash });
     } else {
-        aspect.tools.push({ name: finalName, code: code, state: {} });
+        aspect.tools.push({ name: finalName, code, state: {}, trustedHash });
     }
 
     markChangesUnsaved();

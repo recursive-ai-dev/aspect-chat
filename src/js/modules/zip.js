@@ -4,8 +4,30 @@ import { getCurrentAspect } from './aspects.js';
 import { markChangesSaved } from './state.js';
 import { state } from './state.js';
 import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
-import { normalizeAspect } from './aspects.js';
+import { normalizeAspect, sanitizeToolName, RESERVED_TOOL_NAMES } from './aspects.js';
 import { newId } from './conversations.js';
+
+/**
+ * Make imported tool filenames safe and non-deceptive: sanitised charset, no
+ * collision with a built-in system tool (an unreviewed `Calculator.js` must not
+ * masquerade as the trusted one), and no duplicates within the Aspect.
+ */
+export function resolveImportedToolNames(tools) {
+    const reserved = new Set(RESERVED_TOOL_NAMES.map(n => n.toLowerCase()));
+    const seen = new Set();
+    tools.forEach(t => {
+        let base = sanitizeToolName(t.name);
+        if (reserved.has(base.toLowerCase())) base = 'imported_' + base;
+        let name = base;
+        let i = 2;
+        while (seen.has(name.toLowerCase())) {
+            name = base.replace(/\.js$/i, '') + '_' + (i++) + '.js';
+        }
+        seen.add(name.toLowerCase());
+        t.name = name;
+    });
+    return tools;
+}
 
 // JSZip (~95 KB) is only needed for .aspect import/export. Load it on demand.
 let jszipPromise = null;
@@ -190,8 +212,10 @@ function loadJSZip() {
                         if (path.endsWith(".js") && !toolsFolder.files[path].dir) {
                             const p = toolsFolder.files[path].async("string").then(code => {
                                 const toolName = path.split('/').pop();
-                                tools.push({ 
-                                    name: toolName, 
+                                tools.push({
+                                    // name is re-resolved after all tools load
+                                    // (see resolveImportedToolNames)
+                                    name: toolName,
                                     code,
                                     state: toolsState[toolName] || {}
                                 });
@@ -200,6 +224,7 @@ function loadJSZip() {
                         }
                     });
                     await Promise.all(promises);
+                    resolveImportedToolNames(tools);
                 }
 
                 let memory = {};

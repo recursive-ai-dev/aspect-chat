@@ -77,7 +77,7 @@ An Aspect is a persona plus everything it needs to be useful:
 |---|---|
 | **Instructions** | The system prompt, sent before every response. |
 | **Knowledge bank** | Markdown notes, plus attached `.txt` / `.md` / `.pdf` / `.docx` files, injected into context. |
-| **Tools** | JavaScript you write, executed in a sandboxed Web Worker when the model asks for it. |
+| **Tools** | JavaScript you write, executed in a sandboxed cross-origin iframe when the model asks for it. |
 | **Memory** | Key-value store that persists across conversations via `ReadMemory` / `WriteMemory`. |
 | **Generation settings** | Per-Aspect temperature, top-p, and max response tokens. |
 | **Conversations** | Multiple named chats per Aspect, auto-titled from the first message. |
@@ -102,10 +102,19 @@ async function executeTool(args, state) {
 ```
 
 The model invokes it by writing `[Run Tool: Weather.js({"city":"Kyoto"})]`. The
-result is fed back and the model continues. Tools run in a Web Worker with no
-access to `window`, `document`, or the page's storage — but they *can* use `fetch`,
-so only run tool code you have read. There is a loop guard at 15 consecutive tool
-runs and a configurable per-tool timeout (30s by default).
+result is fed back and the model continues.
+
+Tools run inside a `sandbox="allow-scripts"` iframe with a unique opaque origin:
+no `window`/`document` of the app, no cookies, and `localStorage` / `indexedDB`
+are unreachable — so a tool cannot read your Aspects, conversations, memory, or
+API key. Its Content-Security-Policy blocks the network outright; a tool reaches
+`fetch` only through a broker that asks you the first time and remembers the
+answer per tool (change it any time from the tool's **Network** button in the
+editor). `XMLHttpRequest`, `WebSocket`, and `EventSource` are disabled.
+
+You should still read tool code before enabling it — a tool you allow network
+access to can send whatever it's given anywhere. There is a loop guard at 15
+consecutive tool runs and a configurable per-tool timeout (30s by default).
 
 Built-in tools: Calculator, Weather, DateTime, ReadMemory, WriteMemory, SummonAspect.
 

@@ -1,6 +1,6 @@
 import { insertToolTag } from './tools.js';
 import { renderChatMessages } from './chat.js';
-import { getGenericIcon, renderAspectList, getCurrentAspect, updateAspectData, loadDefaultAspects } from './aspects.js';
+import { getGenericIcon, renderAspectList, getCurrentAspect, updateAspectData, loadDefaultAspects, isToolTrusted, aspectHasUntrustedTools } from './aspects.js';
 import { armPersistence } from './persist.js';
 import { generateIcon } from './imagegen.js';
 import { persistAspects, DEFAULT_PARAMS, getGenerationParams } from './state.js';
@@ -428,8 +428,7 @@ export function showEditorView() {
 
     const reviewBanner = document.getElementById('tools-review-banner');
     if (reviewBanner) {
-        const needsReview = aspect.toolsReviewed === false && Array.isArray(aspect.tools) && aspect.tools.length > 0;
-        reviewBanner.classList.toggle('hidden', !needsReview);
+        reviewBanner.classList.toggle('hidden', !aspectHasUntrustedTools(aspect));
     }
 
     const toolsList = document.getElementById('tools-list');
@@ -440,11 +439,40 @@ export function showEditorView() {
             el.className = 'tool-row';
 
             const nameSpan = document.createElement('span');
-            nameSpan.innerText = tool.name;
             nameSpan.className = 'tool-row-name';
+            const trusted = isToolTrusted(tool);
+            nameSpan.innerText = trusted ? tool.name : `${tool.name}  —  ⚠️ not reviewed`;
+            if (!trusted) {
+                nameSpan.style.opacity = '0.7';
+                nameSpan.title = 'This tool will not run until you open it in the editor and enable it.';
+            }
 
             const btns = document.createElement('div');
             btns.className = 'tool-row-actions';
+
+            // Network permission: undefined = ask on first request, true = allowed,
+            // false = blocked. Click cycles ask → allowed → blocked → ask. This is
+            // the "until you change it" control the first-use prompt refers to.
+            const NET_STATES = [
+                { val: undefined, label: '🌐 Network: ask first', title: 'This tool will prompt the first time it tries to use the network.' },
+                { val: true, label: '🌐 Network: allowed', title: 'This tool may make network requests without prompting.' },
+                { val: false, label: '🚫 Network: blocked', title: 'This tool cannot make network requests.' }
+            ];
+            const netBtn = document.createElement('button');
+            netBtn.className = 'settings-btn';
+            const paintNet = () => {
+                const s = NET_STATES.find(x => x.val === tool.allowNetwork) || NET_STATES[0];
+                netBtn.innerText = s.label;
+                netBtn.title = s.title;
+            };
+            paintNet();
+            netBtn.onclick = () => {
+                const i = NET_STATES.findIndex(x => x.val === tool.allowNetwork);
+                tool.allowNetwork = NET_STATES[(i + 1) % NET_STATES.length].val;
+                if (tool.allowNetwork === undefined) delete tool.allowNetwork;
+                paintNet();
+                markChangesUnsaved();
+            };
 
             const editBtn = document.createElement('button');
             editBtn.innerText = '✏️ Edit';
@@ -461,6 +489,7 @@ export function showEditorView() {
                 showEditorView();
             };
 
+            btns.appendChild(netBtn);
             btns.appendChild(editBtn);
             btns.appendChild(delBtn);
 

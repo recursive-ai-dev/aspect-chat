@@ -7,8 +7,13 @@ import * as aspectsModule from '../src/js/modules/aspects.js';
 import * as uiModule from '../src/js/modules/ui.js';
 import * as chatModule from '../src/js/modules/chat.js';
 import * as dbModule from '../src/js/modules/db.js';
+import { hashToolCode } from '../src/js/modules/aspects.js';
 
-vi.mock('../src/js/modules/aspects.js', () => ({
+/** Tool fixture with a matching trustedHash so the per-tool gate lets it run. */
+const withTrust = (t) => ({ state: {}, ...t, trustedHash: t.trustedHash ?? hashToolCode(t.code) });
+
+vi.mock('../src/js/modules/aspects.js', async (orig) => ({
+    ...(await orig()),
     getCurrentAspect: vi.fn(),
 }));
 
@@ -31,35 +36,13 @@ vi.mock('../src/js/modules/db.js', () => ({
     saveMemory: vi.fn(),
 }));
 
-// Worker mock that actually executes the tool code captured in the Blob source,
-// so agentic-loop / loop-protection branches (which depend on real tool output) run.
-const realWorker = () => {
-    let capturedCode = null;
-    const RealBlob = global.Blob;
-    global.Blob = class { constructor(parts) { capturedCode = parts.join(''); } };
-    global.URL.createObjectURL = vi.fn().mockReturnValue('u');
-    global.URL.revokeObjectURL = vi.fn();
-
-    global.Worker = class Worker {
-        constructor() {
-            const code = capturedCode;
-            this._code = code;
-        }
-        postMessage(data) {
-            const handlers = [];
-            const self = {
-                aspectMemory: undefined,
-                onmessage: null,
-                postMessage: (msg) => { if (this.onmessage) this.onmessage({ data: msg }); },
-            };
-            // Evaluate the worker source so it assigns self.onmessage, then invoke it.
-            const fn = new Function('self', 'message', `${this._code}\n; if (typeof self.onmessage === 'function') self.onmessage({ data: message });`);
-            fn(self, data);
-        }
-        terminate() {}
-    };
-    return () => { global.Blob = RealBlob; };
-};
+// Tool execution is sandboxed in toolSandbox.js; this double runs the tool code
+// directly (jsdom won't execute a sandboxed iframe) while keeping the same
+// message contract, so agentic-loop / loop-protection branches still exercise
+// real tool output. See tests/helpers/fakeToolSandbox.js.
+vi.mock('../src/js/modules/toolSandbox.js', async () => ({
+    runSandboxedTool: (await import('./helpers/fakeToolSandbox.js')).fakeRunSandboxedTool,
+}));
 
 describe('buildSystemPrompt - knowledge cap', () => {
     it('passes knowledge through untouched when under the cap', () => {
@@ -291,7 +274,7 @@ describe('executeJavaScriptTool - argument and input edge cases', () => {
     const baseAspect = (toolsList) => ({
         id: 'current',
         chatHistory: [],
-        tools: toolsList,
+        tools: (toolsList || []).map(withTrust),
     });
 
     beforeEach(() => {
@@ -305,43 +288,31 @@ describe('executeJavaScriptTool - argument and input edge cases', () => {
     });
 
     it('refuses to run tools on an imported Aspect until they are reviewed', async () => {
+        const { runSandboxedTool } = await import('../src/js/modules/toolSandbox.js');
+        runSandboxedTool.mockClear();
+
         const aspect = baseAspect([
             { name: 'imported', code: 'async function executeTool(){ return "ran"; }' },
         ]);
         aspect.name = 'Shared Aspect';
         aspect.toolsReviewed = false;
+        // Imported tools carry no matching trustedHash.
+        delete aspect.tools[0].trustedHash;
         aspectsModule.getCurrentAspect.mockReturnValue(aspect);
-
-        // Worker must never be constructed for an unreviewed tool.
-        const WorkerSpy = vi.fn();
-        global.Worker = class { constructor(...a) { WorkerSpy(...a); } postMessage() {} terminate() {} };
-        global.URL.createObjectURL = vi.fn().mockReturnValue('u');
-        global.URL.revokeObjectURL = vi.fn();
 
         const res = await tools.executeJavaScriptTool('imported', '{}');
         expect(JSON.parse(res).error).toMatch(/not been reviewed/i);
-        expect(WorkerSpy).not.toHaveBeenCalled();
-
-        delete global.Worker; delete global.URL.createObjectURL; delete global.URL.revokeObjectURL;
+        // The sandbox must never be entered for an unreviewed tool.
+        expect(runSandboxedTool).not.toHaveBeenCalled();
     });
 
-    it('parses valid JSON args', async () => {
+    it('parses valid JSON args and hands them to the tool', async () => {
         const aspect = baseAspect([
             { name: 'echo', code: 'async function executeTool(args, state) { return args; }' },
         ]);
         aspectsModule.getCurrentAspect.mockReturnValue(aspect);
-        let capturedArgs;
-        global.Worker = class Worker {
-            constructor() {}
-            postMessage(data) { capturedArgs = data.args; this.onmessage({ data: { success: true, result: capturedArgs, state: {} } }); }
-            terminate() {}
-        };
-        global.URL.createObjectURL = vi.fn().mockReturnValue('u');
-        global.URL.revokeObjectURL = vi.fn();
         const res = await tools.executeJavaScriptTool('echo', '{"x":1,"y":[2,3]}');
-        expect(capturedArgs).toEqual({ x: 1, y: [2, 3] });
-        expect(res).toContain('"x": 1');
-        delete global.Worker; delete global.URL.createObjectURL; delete global.URL.revokeObjectURL;
+        expect(JSON.parse(res)).toEqual({ x: 1, y: [2, 3] });
     });
 
     it('falls back to raw string when args are not valid JSON', async () => {
@@ -349,17 +320,8 @@ describe('executeJavaScriptTool - argument and input edge cases', () => {
             { name: 'raw', code: 'async function executeTool(args, state) { return args; }' },
         ]);
         aspectsModule.getCurrentAspect.mockReturnValue(aspect);
-        let capturedArgs;
-        global.Worker = class Worker {
-            constructor() {}
-            postMessage(data) { capturedArgs = data.args; this.onmessage({ data: { success: true, result: capturedArgs, state: {} } }); }
-            terminate() {}
-        };
-        global.URL.createObjectURL = vi.fn().mockReturnValue('u');
-        global.URL.revokeObjectURL = vi.fn();
-        await tools.executeJavaScriptTool('raw', 'just a plain string with no json');
-        expect(capturedArgs).toBe('just a plain string with no json');
-        delete global.Worker; delete global.URL.createObjectURL; delete global.URL.revokeObjectURL;
+        const res = await tools.executeJavaScriptTool('raw', 'just a plain string with no json');
+        expect(res).toBe('just a plain string with no json');
     });
 
     it('treats empty / whitespace args as empty object', async () => {
@@ -367,19 +329,8 @@ describe('executeJavaScriptTool - argument and input edge cases', () => {
             { name: 'empty', code: 'async function executeTool(args, state) { return args; }' },
         ]);
         aspectsModule.getCurrentAspect.mockReturnValue(aspect);
-        let capturedArgs;
-        global.Worker = class Worker {
-            constructor() {}
-            postMessage(data) { capturedArgs = data.args; this.onmessage({ data: { success: true, result: capturedArgs, state: {} } }); }
-            terminate() {}
-        };
-        global.URL.createObjectURL = vi.fn().mockReturnValue('u');
-        global.URL.revokeObjectURL = vi.fn();
-        await tools.executeJavaScriptTool('empty', '');
-        expect(capturedArgs).toEqual({});
-        await tools.executeJavaScriptTool('empty', '   ');
-        expect(capturedArgs).toEqual({});
-        delete global.Worker; delete global.URL.createObjectURL; delete global.URL.revokeObjectURL;
+        expect(JSON.parse(await tools.executeJavaScriptTool('empty', ''))).toEqual({});
+        expect(JSON.parse(await tools.executeJavaScriptTool('empty', '   '))).toEqual({});
     });
 
     it('trims surrounding whitespace from JSON args', async () => {
@@ -387,53 +338,49 @@ describe('executeJavaScriptTool - argument and input edge cases', () => {
             { name: 'trim', code: 'async function executeTool(args, state) { return args; }' },
         ]);
         aspectsModule.getCurrentAspect.mockReturnValue(aspect);
-        let capturedArgs;
-        global.Worker = class Worker {
-            constructor() {}
-            postMessage(data) { capturedArgs = data.args; this.onmessage({ data: { success: true, result: capturedArgs, state: {} } }); }
-            terminate() {}
-        };
-        global.URL.createObjectURL = vi.fn().mockReturnValue('u');
-        global.URL.revokeObjectURL = vi.fn();
-        await tools.executeJavaScriptTool('trim', '   {"a":1}   ');
-        expect(capturedArgs).toEqual({ a: 1 });
-        delete global.Worker; delete global.URL.createObjectURL; delete global.URL.revokeObjectURL;
+        const res = await tools.executeJavaScriptTool('trim', '   {"a":1}   ');
+        expect(JSON.parse(res)).toEqual({ a: 1 });
     });
 
-    it('returns a runtime error when the worker reports failure', async () => {
+    it('returns a runtime error when the tool throws', async () => {
         const aspect = baseAspect([
             { name: 'boom', code: 'async function executeTool(args, state) { throw new Error("kaboom"); }' },
         ]);
         aspectsModule.getCurrentAspect.mockReturnValue(aspect);
-        global.Worker = class Worker {
-            constructor() {}
-            postMessage() { this.onmessage({ data: { success: false, error: 'kaboom' } }); }
-            terminate() {}
-        };
-        global.URL.createObjectURL = vi.fn().mockReturnValue('u');
-        global.URL.revokeObjectURL = vi.fn();
         const res = await tools.executeJavaScriptTool('boom', '{}');
         expect(JSON.parse(res).error).toContain('kaboom');
-        delete global.Worker; delete global.URL.createObjectURL; delete global.URL.revokeObjectURL;
+    });
+
+    it('reports malformed JSON args instead of passing them through half-parsed', async () => {
+        const aspect = baseAspect([
+            { name: 'echo', code: 'async function executeTool(args) { return args; }' },
+        ]);
+        aspectsModule.getCurrentAspect.mockReturnValue(aspect);
+        const res = await tools.executeJavaScriptTool('echo', '{"x": 1,');   // starts like JSON, invalid
+        expect(JSON.parse(res).error).toMatch(/could not parse the arguments/i);
+    });
+
+    it('refuses to persist a runaway state blob', async () => {
+        const aspect = baseAspect([
+            { name: 'hog', code: 'async function executeTool(args, state) { state.big = "z".repeat(300000); return "ok"; }' },
+        ]);
+        aspectsModule.getCurrentAspect.mockReturnValue(aspect);
+        const res = await tools.executeJavaScriptTool('hog', '{}');
+        expect(JSON.parse(res).error).toMatch(/state was not saved/i);
+        expect(aspect.tools[0].state.big).toBeUndefined();
     });
 });
 
 describe('processAIResponseAndTools - multi-input and edge cases', () => {
-    const aspectWithHistory = (tools = []) => ({ id: 'current', name: 'A', chatHistory: [], tools });
+    const aspectWithHistory = (tools = []) => ({ id: 'current', name: 'A', chatHistory: [], tools: tools.map(withTrust) });
 
-    let restoreBlob;
     beforeEach(() => {
         state.currentAspectId = 'current';
         state.consecutiveToolRuns = 0;
         vi.clearAllMocks();
-        restoreBlob = realWorker();
+        // Tool code runs through the mocked toolSandbox (see top of file).
         // Stop the real network call at the end of the tool pipeline.
         vi.spyOn(tools, 'sendAIRequest').mockResolvedValue(undefined);
-    });
-
-    afterEach(() => {
-        restoreBlob();
-        delete global.Worker; delete global.URL.createObjectURL; delete global.URL.revokeObjectURL;
     });
 
     it('coerces null/undefined message to empty string and stores assistant message', async () => {
@@ -456,6 +403,16 @@ describe('processAIResponseAndTools - multi-input and edge cases', () => {
         await tools.processAIResponseAndTools('Do [Run Tool: t] now', aspect);
         const logText = aspect.chatHistory.map(m => m.content).join('\n');
         expect(logText).toContain('Tool Executed:** `t`');
+    });
+
+    it('runs at most 8 tool calls from one model message', async () => {
+        const aspect = aspectWithHistory([{ name: 't', code: 'async function executeTool(a,s){return "ok";}' }]);
+        aspectsModule.getCurrentAspect.mockReturnValue(aspect);
+        const msg = Array.from({ length: 20 }, () => '[Run Tool: t]').join(' ');
+        await tools.processAIResponseAndTools(msg, aspect);
+        const runs = aspect.chatHistory.filter(m => /Tool Executed:\*\* `t`/.test(m.content || '')).length;
+        expect(runs).toBe(8);
+        expect(aspect.chatHistory.map(m => m.content).join('\n')).toMatch(/first 8 of 20 tool calls/);
     });
 
     it('extracts multiple tool calls from a single message', async () => {
@@ -511,7 +468,7 @@ describe('processAIResponseAndTools - multi-input and edge cases', () => {
         state.consecutiveToolRuns = 15;
         await tools.processAIResponseAndTools('[Run Tool: again]', aspect);
         const logText = aspect.chatHistory.map(m => m.content).join('\n');
-        expect(logText).toContain('Loop protection triggered');
+        expect(logText).toMatch(/Loop protection/);
         expect(state.consecutiveToolRuns).toBe(0);
     });
 });

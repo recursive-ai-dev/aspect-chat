@@ -21,6 +21,8 @@ function cspPlugin() {
         "img-src 'self' data: blob:",
         "font-src 'self' data:",
         "connect-src * data: blob:",
+        // Tool code runs in an `about:srcdoc` sandboxed iframe (toolSandbox.js).
+        "frame-src 'self'",
         "object-src 'none'",
         "base-uri 'self'",
         "form-action 'none'"

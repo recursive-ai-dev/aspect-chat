@@ -342,7 +342,7 @@
                         <div class="editor-field">
                             <label>Injectable JS tools</label>
                             <div class="panel-box dashed">
-                                <p class="field-hint">Tools run in a sandboxed Web Worker. The model calls one by writing <code>[Run Tool: Name.js({"arg":"value"})]</code>.</p>
+                                <p class="field-hint">Tools run in a sandboxed iframe with no access to your data; network is off until you allow it per tool. The model calls one by writing <code>[Run Tool: Name.js({"arg":"value"})]</code>.</p>
                                 <div id="tools-review-banner" class="tools-review-banner hidden">
                                     <span>⚠️ These tools were imported from an <code>.aspect</code> file and are <strong>disabled</strong>. Review the code below, then enable them if you trust the source.</span>
                                     <button class="settings-btn" data-action="trust-tools">Trust &amp; enable tools</button>
