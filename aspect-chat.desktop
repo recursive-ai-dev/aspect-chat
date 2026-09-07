@@ -1,0 +1,15 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Aspect Chat
+GenericName=Custom AI Personas Studio
+Comment=Create Aspects out of API LLM inference calls
+# Template only. `desktop/aspect-chat-install.sh` writes the real entry into
+# ~/.local/share/applications/ with Exec pointing at ~/.local/bin/aspect-chat,
+# which serves the local build on http://localhost and opens a browser.
+Exec=sh -c "exec \\$HOME/.local/bin/aspect-chat"
+Icon=aspect-chat
+Terminal=false
+StartupNotify=false
+Categories=Development;Utility;
+Keywords=aspect-chat;ai;persona;llm;api;
