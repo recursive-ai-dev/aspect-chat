@@ -59,7 +59,8 @@ import {
     renderConversationList,
     renderKnowledgeFileList,
     generateAspectIcon,
-    showToast
+    showToast,
+    storageStartFresh
 } from './modules/ui.js';
 
 import { applyTheme } from './modules/themes.js';
@@ -204,7 +205,7 @@ const ACTIONS = {
 
     // Storage-error overlay
     'storage-retry': () => location.reload(),
-    'storage-fresh': () => window.storageStartFresh(),
+    'storage-fresh': storageStartFresh,
 
     // Backup & restore
     'export-all': exportAllAspects,
@@ -234,6 +235,11 @@ function wireDelegatedClicks() {
         const nodeButton = event.target.closest('[data-workflow-node]');
         if (nodeButton && !nodeButton.closest('#chat-messages, .message-wrapper')) {
             window.addWorkflowNode(nodeButton.dataset.workflowNode);
+        }
+
+        const dropdown = document.getElementById('tools-dropdown');
+        if (dropdown && dropdown.classList.contains('show') && !event.target.closest('.tools-dropdown-wrapper')) {
+            dropdown.classList.remove('show');
         }
     });
 }
@@ -329,7 +335,10 @@ function wireInputs() {
     });
 
     // --- Theme reflects immediately, not only on save.
-    on('theme-select', 'change', (e) => applyTheme(e.target.value));
+    on('theme-select', 'change', (e) => {
+        state.settings.theme = e.target.value;
+        applyTheme(e.target.value, { persist: true });
+    });
 }
 
 /**

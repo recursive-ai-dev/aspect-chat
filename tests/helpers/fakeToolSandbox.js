@@ -29,7 +29,7 @@ export const fakeRunSandboxedTool = vi.fn(async (opts) => {
         addEventListener: (type, fn) => { if (type === 'message') listeners.add(fn); },
         removeEventListener: (type, fn) => { if (type === 'message') listeners.delete(fn); },
         postMessage: (msg) => {
-            if (msg && (msg.type === 'writeMemory' || msg.type === 'summonAspect')) {
+            if (msg && (msg.type === 'writeMemory' || msg.type === 'summonAspect' || msg.type === 'watchMemory')) {
                 Promise.resolve(onPrivileged && onPrivileged(msg, deliver));
             }
         }

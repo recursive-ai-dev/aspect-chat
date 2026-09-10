@@ -338,6 +338,44 @@ export async function testConnection(url, key) {
 }
 
 /**
+ * Whether the provider at `url` is known to support native function calling
+ * (the OpenAI `tools` / `tool_choice` request fields).
+ *
+ * Returns true for every provider we have verified accepts the schema.
+ * Returns false for WebLLM (runs in-browser, not an HTTP endpoint) and for
+ * unknown / custom URLs — it is always safe to fall back to the text-marker
+ * path, so unknown is conservatively false.
+ */
+export function supportsNativeTools(url) {
+    if (!url || url === WEBLLM_PROVIDER) return false;
+
+    // Known-capable hosted providers (exact prefix match on base URL).
+    const CAPABLE_PREFIXES = [
+        'https://api.openai.com/',
+        'https://api.groq.com/',
+        'https://api.cerebras.ai/',
+        'https://openrouter.ai/',
+        'https://api.mistral.ai/',
+        'https://api.deepseek.com/',
+        'https://generativelanguage.googleapis.com/',
+    ];
+
+    const trimmed = url.trim();
+    for (const prefix of CAPABLE_PREFIXES) {
+        if (trimmed.startsWith(prefix)) return true;
+    }
+
+    // Local servers: Ollama (11434) and LM Studio (1234) both support tools.
+    // Detect them via isLocalEndpoint + well-known port patterns.
+    if (isLocalEndpoint(trimmed)) {
+        if (trimmed.includes(':11434')) return true; // Ollama
+        if (trimmed.includes(':1234'))  return true; // LM Studio
+    }
+
+    return false;
+}
+
+/**
  * Warn about the one mixed-content case that silently breaks local models:
  * an https:// page cannot reach an http://localhost server in most browsers.
  */

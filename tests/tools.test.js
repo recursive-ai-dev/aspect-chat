@@ -536,6 +536,28 @@ describe('brokerToolFetch — per-origin network grants (F003)', () => {
         expect(r.error).toMatch(/invalid URL/i);
     });
 
+    it('rejects non-http/https schemes such as file: and javascript:', async () => {
+        const tool = { name: 't.js', code: 'x', state: {}, allowNetwork: true };
+        const r1 = await tools.brokerToolFetch(aspect(), tool, { method: 'GET', url: 'file:///etc/passwd' });
+        expect(r1.ok).toBe(false);
+        expect(r1.error).toMatch(/invalid URL/i);
+
+        const r2 = await tools.brokerToolFetch(aspect(), tool, { method: 'GET', url: 'javascript:alert(1)' });
+        expect(r2.ok).toBe(false);
+        expect(r2.error).toMatch(/invalid URL/i);
+    });
+
+    it('strips body on GET and HEAD requests before fetch', async () => {
+        const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('ok'));
+        const tool = { name: 't.js', code: 'x', state: {}, allowNetwork: true };
+        await tools.brokerToolFetch(aspect(), tool, { method: 'GET', url: 'https://api.example.com/data', body: 'illegal-body' });
+        expect(fetchSpy).toHaveBeenCalledWith('https://api.example.com/data', expect.objectContaining({
+            method: 'GET',
+            body: undefined
+        }));
+        fetchSpy.mockRestore();
+    });
+
     it('writes every outbound request into the transcript', async () => {
         const a = aspect();
         const tool = { name: 't.js', code: 'x', state: {}, allowNetwork: true };
@@ -543,5 +565,44 @@ describe('brokerToolFetch — per-origin network grants (F003)', () => {
         expect(a.chatHistory).toHaveLength(1);
         expect(a.chatHistory[0].role).toBe('system');
         expect(a.chatHistory[0].content).toContain('api.example.com');
+    });
+});
+
+describe('executeJavaScriptTool safety', () => {
+    it('returns error JSON when no active aspect exists', async () => {
+        aspectsModule.getCurrentAspect.mockReturnValue(null);
+        const result = JSON.parse(await tools.executeJavaScriptTool('Test.js', '{}'));
+        expect(result.error).toMatch(/no active aspect/i);
+    });
+});
+
+describe('buildApiMessages', () => {
+    it('safely handles undefined aspect or chatHistory', () => {
+        const messages1 = tools.buildApiMessages(null, 'System prompt', null, 5);
+        expect(messages1).toEqual([
+            { role: 'system', content: 'System prompt' }
+        ]);
+
+        const messages2 = tools.buildApiMessages({}, 'System prompt', 'Extra tool result', 5);
+        expect(messages2).toHaveLength(2);
+        expect(messages2[0]).toEqual({ role: 'system', content: 'System prompt' });
+        expect(messages2[1].content).toContain('Extra tool result');
+    });
+
+    it('limits history to the specified maxContext count', () => {
+        const aspect = {
+            chatHistory: [
+                { role: 'user', content: '1' },
+                { role: 'assistant', content: '2' },
+                { role: 'user', content: '3' },
+                { role: 'assistant', content: '4' }
+            ]
+        };
+        const messages = tools.buildApiMessages(aspect, 'System', null, 2);
+        expect(messages).toEqual([
+            { role: 'system', content: 'System' },
+            { role: 'user', content: '3' },
+            { role: 'assistant', content: '4' }
+        ]);
     });
 });

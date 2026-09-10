@@ -45,6 +45,16 @@ describe('themes', () => {
         expect(document.body.dataset.theme).toBe('warm-light');
     });
 
+    it('applyTheme persists to localStorage when persist option is true', () => {
+        applyTheme('midnight', { persist: true });
+        expect(localStorage.getItem('theme')).toBe('midnight');
+        expect(localStorage.getItem('darkMode')).toBe('true');
+
+        applyTheme('sepia', { persist: true });
+        expect(localStorage.getItem('theme')).toBe('sepia');
+        expect(localStorage.getItem('darkMode')).toBe('false');
+    });
+
     it('populateThemeSelect fills options and selects the current theme', () => {
         const select = document.createElement('select');
         populateThemeSelect(select, 'forest');

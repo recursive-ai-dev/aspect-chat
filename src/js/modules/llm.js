@@ -20,15 +20,117 @@ import {
 import { streamWebLLMChat } from './webllm.js';
 
 /**
+ * Extract text from a choices[0].delta object, handling both string content
+ * and multi-part content arrays (e.g. [{ type: 'text', text: '...' }]), as
+ * well as completions-style text fields.
+ */
+export function extractDeltaText(data) {
+    const choice = data?.choices?.[0];
+    if (!choice) return '';
+    const content = choice.delta?.content;
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+        return content
+            .map(part => (typeof part === 'string' ? part : (part?.text || '')))
+            .join('');
+    }
+    if (typeof choice.delta?.text === 'string') return choice.delta.text;
+    if (typeof choice.text === 'string') return choice.text;
+    return '';
+}
+
+/**
+ * Extract text from a choices[0].message object, handling both string content
+ * and multi-part content arrays.
+ */
+export function extractMessageContent(message) {
+    if (!message) return null;
+    const content = message.content;
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+        return content
+            .map(part => (typeof part === 'string' ? part : (part?.text || '')))
+            .join('');
+    }
+    if (typeof message.text === 'string') return message.text;
+    return null;
+}
+
+/**
+ * Accumulate streaming tool_calls deltas from a single SSE event payload into
+ * an in-progress map (index → {id, name, argsChunks[]}).
+ * Returns nothing; caller owns the map.
+ */
+function accumulateToolCallDelta(data, toolCallsMap) {
+    const choice = data?.choices?.[0];
+    if (!choice) return;
+    const deltas = choice.delta?.tool_calls;
+    if (!Array.isArray(deltas)) return;
+    for (const tc of deltas) {
+        const idx = tc.index ?? 0;
+        if (!toolCallsMap.has(idx)) {
+            toolCallsMap.set(idx, { id: '', name: '', argsChunks: [] });
+        }
+        const entry = toolCallsMap.get(idx);
+        if (tc.id) entry.id = tc.id;
+        if (tc.function?.name) entry.name = tc.function.name;
+        if (typeof tc.function?.arguments === 'string') {
+            entry.argsChunks.push(tc.function.arguments);
+        }
+    }
+}
+
+/**
+ * Convert a completed tool_calls accumulation map (or a non-streaming
+ * `choices[0].message.tool_calls` array) into a flat `{name, args}` array.
+ *
+ * Works for both streaming (pass the Map) and non-streaming (pass the raw
+ * tool_calls array from the response JSON).
+ */
+export function extractNativeToolCalls(source) {
+    if (!source) return [];
+
+    // Non-streaming: raw array from choices[0].message.tool_calls
+    if (Array.isArray(source)) {
+        return source
+            .filter(tc => tc?.function?.name)
+            .map(tc => ({
+                name: tc.function.name,
+                args: tc.function.arguments ?? '{}'
+            }));
+    }
+
+    // Streaming: Map populated by accumulateToolCallDelta
+    if (source instanceof Map) {
+        const out = [];
+        // Iterate in index order
+        const sorted = [...source.entries()].sort((a, b) => a[0] - b[0]);
+        for (const [, entry] of sorted) {
+            if (!entry.name) continue;
+            out.push({ name: entry.name, args: entry.argsChunks.join('') });
+        }
+        return out;
+    }
+
+    return [];
+}
+
+/**
  * Parse an OpenAI-style SSE stream, invoking `onDelta` for each content chunk.
+ *
+ * When a `finish_reason: 'tool_calls'` chunk arrives (native function calling),
+ * the accumulated tool calls are passed to the optional `onToolCall` callback
+ * instead of being treated as text content.
  *
  * Chunk boundaries do not respect line boundaries, so a partial line is carried
  * across reads in `pending` and only parsed once its newline arrives.
  */
-export async function readSSEStream(reader, onDelta) {
+export async function readSSEStream(reader, onDelta, onToolCall) {
     const decoder = new TextDecoder('utf-8');
     let full = '';
     let pending = '';
+    // Accumulator for streaming tool_calls fragments (index → entry).
+    const toolCallsMap = new Map();
 
     const consumeLine = (rawLine) => {
         const line = rawLine.replace(/\r$/, '').trim();
@@ -50,7 +152,21 @@ export async function readSSEStream(reader, onDelta) {
             throw new Error(data.error.message || String(data.error));
         }
 
-        const delta = data?.choices?.[0]?.delta?.content;
+        // Accumulate any tool_call delta fragments.
+        accumulateToolCallDelta(data, toolCallsMap);
+
+        // Detect finish_reason — either 'tool_calls' (native FC) or normal end.
+        const choice = data?.choices?.[0];
+        const finishReason = choice?.finish_reason;
+        if (finishReason === 'tool_calls') {
+            if (onToolCall && toolCallsMap.size > 0) {
+                const calls = extractNativeToolCalls(toolCallsMap);
+                if (calls.length > 0) onToolCall(calls);
+            }
+            return;
+        }
+
+        const delta = extractDeltaText(data);
         if (delta) {
             full += delta;
             if (onDelta) onDelta(delta, full);
@@ -163,7 +279,7 @@ export function hasUsableProvider(settings) {
  *
  * @returns {Promise<string>} the complete assistant message.
  */
-export async function streamChat({ target, messages, params = {}, signal, onDelta, onProgress }) {
+export async function streamChat({ target, messages, params = {}, signal, onDelta, onProgress, onToolCall }) {
     const invalid = validateTarget(target);
     if (invalid) throw new Error(invalid);
 
@@ -186,6 +302,12 @@ export async function streamChat({ target, messages, params = {}, signal, onDelt
     if (typeof params.maxTokens === 'number' && params.maxTokens > 0) body.max_tokens = params.maxTokens;
     if (typeof params.topP === 'number') body.top_p = params.topP;
 
+    // Native function calling: attach the tools schema when the caller provides one.
+    if (Array.isArray(params.tools) && params.tools.length > 0) {
+        body.tools = params.tools;
+        body.tool_choice = 'auto';
+    }
+
     let response;
     try {
         response = await fetch(getApiEndpoint(target.url), {
@@ -206,7 +328,7 @@ export async function streamChat({ target, messages, params = {}, signal, onDelt
         throw new Error('The server returned no response body. It may not support streaming.');
     }
 
-    return readSSEStream(response.body.getReader(), onDelta);
+    return readSSEStream(response.body.getReader(), onDelta, onToolCall);
 }
 
 /**
@@ -254,7 +376,7 @@ export async function completeChat({ target, messages, params = {}, signal }) {
     }
 
     const data = await response.json().catch(() => ({}));
-    const content = data?.choices?.[0]?.message?.content;
+    const content = extractMessageContent(data?.choices?.[0]?.message);
     if (content == null) {
         throw new Error('Empty response from model.');
     }
@@ -270,12 +392,12 @@ export async function completeChat({ target, messages, params = {}, signal }) {
  *
  * `onFallback(reason, target)` fires before the retry so the UI can say why.
  */
-export async function streamChatWithFallback({ settings, messages, params, signal, onDelta, onProgress, onFallback }) {
+export async function streamChatWithFallback({ settings, messages, params, signal, onDelta, onProgress, onFallback, onToolCall }) {
     const primary = primaryTarget(settings);
     const secondary = fallbackTarget(settings);
 
     try {
-        return await streamChat({ target: primary, messages, params, signal, onDelta, onProgress });
+        return await streamChat({ target: primary, messages, params, signal, onDelta, onProgress, onToolCall });
     } catch (err) {
         if (err.name === 'AbortError' || signal?.aborted) throw err;
         if (!secondary) throw err;
@@ -283,7 +405,7 @@ export async function streamChatWithFallback({ settings, messages, params, signa
         if (onFallback) onFallback(err.message, secondary);
 
         try {
-            return await streamChat({ target: secondary, messages, params, signal, onDelta, onProgress });
+            return await streamChat({ target: secondary, messages, params, signal, onDelta, onProgress, onToolCall });
         } catch (fallbackErr) {
             if (fallbackErr.name === 'AbortError') throw fallbackErr;
             throw new Error(`Primary provider failed (${err.message}). Fallback also failed (${fallbackErr.message}).`);

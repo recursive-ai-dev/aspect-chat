@@ -12,7 +12,7 @@ import {
     hasUsableProvider,
     readSSEStream
 } from './llm.js';
-import { getApiEndpoint, buildHeaders } from './providers.js';
+import { getApiEndpoint, buildHeaders, supportsNativeTools } from './providers.js';
 import { runSandboxedTool } from './toolSandbox.js';
 
 export { getApiEndpoint };
@@ -60,11 +60,12 @@ export function buildApiMessages(aspect, systemPrompt, extraContext, maxContext)
         { role: 'system', content: systemPrompt }
     ];
 
-    const contextMessages = aspect.chatHistory.filter(msg => msg.role === 'user' || msg.role === 'assistant');
+    const history = Array.isArray(aspect?.chatHistory) ? aspect.chatHistory : [];
+    const contextMessages = history.filter(msg => msg && (msg.role === 'user' || msg.role === 'assistant'));
     const slicedMessages = contextMessages.slice(-maxContext);
 
     slicedMessages.forEach(msg => {
-        apiMessages.push({ role: msg.role === 'user' ? 'user' : 'assistant', content: msg.content });
+        apiMessages.push({ role: msg.role === 'user' ? 'user' : 'assistant', content: String(msg.content ?? '') });
     });
 
     if (extraContext) {
@@ -131,6 +132,9 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
 
         export async function executeJavaScriptTool(toolName, argStr) {
             const aspect = getCurrentAspect();
+            if (!aspect || !Array.isArray(aspect.tools)) {
+                return JSON.stringify({ error: `No active Aspect or tools found.` });
+            }
             const tool = aspect.tools.find(t => t.name === toolName);
             if (!tool) {
                 return JSON.stringify({ error: `Tool "${toolName}" not found.` });
@@ -213,14 +217,46 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
         async function handlePrivilegedToolMessage(aspect, msg, post) {
             if (msg.type === 'writeMemory') {
                 try {
-                    if (!aspect.memory) aspect.memory = {};
-                    aspect.memory[msg.key] = msg.value;
-                    await saveMemory(aspect.id, aspect.memory);
+                    const key = typeof msg.key === 'string' ? msg.key.trim() : '';
+                    if (!key) {
+                        post({ type: 'memoryWriteComplete', messageId: msg.messageId, error: 'Memory key must be a non-empty string.' });
+                        return;
+                    }
+                    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+                        post({ type: 'memoryWriteComplete', messageId: msg.messageId, error: 'Invalid memory key.' });
+                        return;
+                    }
+                    if (!aspect.memory || typeof aspect.memory !== 'object') aspect.memory = {};
+                    aspect.memory[key] = msg.value;
+
+                    // Ephemeral keys (prefixed with ~) are kept in-memory only and
+                    // never persisted to IndexedDB.
+                    if (!key.startsWith('~')) {
+                        await saveMemory(aspect.id, aspect.memory);
+                    }
+
+                    // Notify any registered memory listeners for this key.
+                    const listeners = (aspect.memoryListeners || {})[key] || [];
+                    if (listeners.length > 0) {
+                        addSystemLog(`🔔 **Memory updated:** \`${key}\` — ${listeners.length} listener(s) notified`);
+                    }
+
                     post({ type: 'memoryWriteComplete', messageId: msg.messageId });
                 } catch (err) {
                     console.error('Failed to save aspect memory', err);
                     post({ type: 'memoryWriteComplete', messageId: msg.messageId, error: err.message });
                 }
+                return;
+            }
+
+            if (msg.type === 'watchMemory') {
+                if (!aspect.memoryListeners) aspect.memoryListeners = {};
+                const watchKey = typeof msg.key === 'string' ? msg.key.trim() : '';
+                if (watchKey) {
+                    if (!aspect.memoryListeners[watchKey]) aspect.memoryListeners[watchKey] = [];
+                    aspect.memoryListeners[watchKey].push(msg.label || 'watcher');
+                }
+                post({ type: 'memoryWatchComplete', messageId: msg.messageId });
                 return;
             }
 
@@ -240,12 +276,40 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                     post({ type: 'summonComplete', messageId, error: err.message });
                 }
             }
+
+            if (msg.type === 'renderCanvas') {
+                const { content, renderType, width, height, caption, messageId } = msg;
+                try {
+                    // Build an HTML block to inject into the chat transcript.
+                    // chat.js pipes all system messages through renderMarkdown →
+                    // DOMPurify, so SVG elements survive and script/event-handler
+                    // attributes are stripped — no extra sanitization needed here.
+                    let block;
+                    if (renderType === 'html') {
+                        block = `<div style="max-width:${Number(width) || 400}px;height:${Number(height) || 300}px;overflow:auto;">${content}</div>`;
+                    } else {
+                        // svg (default)
+                        block = `<div style="max-width:${Number(width) || 400}px;">${content}</div>`;
+                    }
+                    if (caption) {
+                        block += `\n<p><em>${caption}</em></p>`;
+                    }
+                    addSystemLog(block);
+                    post({ type: 'renderCanvasComplete', messageId });
+                } catch (err) {
+                    post({ type: 'renderCanvasComplete', messageId, error: err.message });
+                }
+            }
         }
 
-        /** The scheme+host of a URL, or null if it will not parse. */
+        /** The scheme+host of a URL, or null if it will not parse or is not HTTP/HTTPS. */
         function requestOrigin(url) {
             try {
-                return new URL(String(url), (typeof location !== 'undefined' && location.href) || undefined).origin;
+                const parsed = new URL(String(url), (typeof location !== 'undefined' && location.href) || undefined);
+                if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+                    return null;
+                }
+                return parsed.origin;
             } catch {
                 return null;
             }
@@ -321,10 +385,12 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
             logToolNetwork(aspect, tool.name, req);
 
             try {
+                const method = String(req.method || 'GET').toUpperCase();
+                const hasBody = method !== 'GET' && method !== 'HEAD';
                 const resp = await fetch(req.url, {
-                    method: req.method || 'GET',
+                    method,
                     headers: req.headers || undefined,
-                    body: req.body
+                    body: hasBody ? req.body : undefined
                 });
                 const body = await resp.text();
                 return {
@@ -393,6 +459,123 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
 
         /** Longest call string we'll pull out of one `[Run Tool: …]` tag. */
         const MAX_TOOL_CALL_LEN = 20000;
+
+        /**
+         * Parse a tool's source code for a schema annotation and return an
+         * OpenAI-compatible function definition object.
+         *
+         * Supported annotation styles (near the top of the file):
+         *
+         * Style 1 — JSDoc-style line comments:
+         * ```
+         * // @tool-schema
+         * // description: Fetches weather for a city
+         * // param city string The city name (required)
+         * // param units string 'celsius' or 'fahrenheit' (optional, default: celsius)
+         * ```
+         *
+         * Style 2 — inline JSON block comment:
+         * ```
+         * /* @schema
+         * {"description": "...", "parameters": {"type": "object", "properties": {...}}}
+         * *​/
+         * ```
+         *
+         * If no annotation is found, a minimal permissive schema is generated.
+         */
+        export function buildToolSchema(tool) {
+            const name = (tool.name || 'UnknownTool').replace(/\.js$/i, '');
+            const code = typeof tool.code === 'string' ? tool.code : '';
+
+            // --- Style 2: JSON block comment ---
+            const blockMatch = code.match(/\/\*\s*@schema\s*([\s\S]*?)\*\//);
+            if (blockMatch) {
+                try {
+                    const parsed = JSON.parse(blockMatch[1].trim());
+                    return {
+                        type: 'function',
+                        function: {
+                            name,
+                            description: parsed.description || `Run ${name}`,
+                            parameters: parsed.parameters || { type: 'object', properties: {}, additionalProperties: true }
+                        }
+                    };
+                } catch {
+                    // Fall through to style 1 or minimal schema.
+                }
+            }
+
+            // --- Style 1: JSDoc-style line annotations ---
+            const lines = code.split('\n');
+            let schemaStart = -1;
+            for (let i = 0; i < Math.min(lines.length, 60); i++) {
+                if (/\/\/\s*@tool-schema/.test(lines[i])) { schemaStart = i; break; }
+            }
+
+            if (schemaStart !== -1) {
+                let description = '';
+                const properties = {};
+                const required = [];
+
+                for (let i = schemaStart + 1; i < lines.length; i++) {
+                    const lineMatch = lines[i].match(/^\/\/\s*(.*)/);
+                    if (!lineMatch) break; // non-comment line ends the block
+
+                    const content = lineMatch[1].trim();
+                    if (!content) continue;
+
+                    const descMatch = content.match(/^description:\s*(.+)/);
+                    if (descMatch) { description = descMatch[1].trim(); continue; }
+
+                    // param <name> <type> <rest...>
+                    const paramMatch = content.match(/^param\s+(\S+)\s+(\S+)\s*(.*)/);
+                    if (paramMatch) {
+                        const [, pName, pType, pDesc] = paramMatch;
+                        const isOptional = /\(optional/i.test(pDesc);
+                        properties[pName] = {
+                            type: pType,
+                            description: pDesc.trim() || undefined
+                        };
+                        if (!isOptional) required.push(pName);
+                    }
+                }
+
+                const parameters = { type: 'object', properties };
+                if (required.length > 0) parameters.required = required;
+                else parameters.additionalProperties = true;
+
+                return {
+                    type: 'function',
+                    function: {
+                        name,
+                        description: description || tool.description || `Run ${name}`,
+                        parameters
+                    }
+                };
+            }
+
+            // --- Minimal fallback schema ---
+            return {
+                type: 'function',
+                function: {
+                    name,
+                    description: tool.description || `Run ${name}`,
+                    parameters: { type: 'object', properties: {}, additionalProperties: true }
+                }
+            };
+        }
+
+        /**
+         * Build the `tools` array to pass to the API for an aspect.
+         * Only includes trusted tools (same gate as executeJavaScriptTool).
+         * Returns an empty array when there are no trusted tools.
+         */
+        export function buildToolsParam(aspect) {
+            if (!aspect || !Array.isArray(aspect.tools)) return [];
+            return aspect.tools
+                .filter(t => isToolTrusted(t))
+                .map(t => buildToolSchema(t));
+        }
 
         /**
          * Parse `[Run Tool: Name({...})]` calls out of a model message.
@@ -491,9 +674,14 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                 : parseToolCalls(aiMessage);
 
             if (toolCalls.length === 0) {
-                aspect.chatHistory.push({ role: 'assistant', content: aiMessage });
-                renderChatMessages();
-                markChangesUnsaved();
+                const trimmed = String(aiMessage || '').trim();
+                if (trimmed) {
+                    aspect.chatHistory.push({ role: 'assistant', content: aiMessage });
+                    renderChatMessages();
+                    markChangesUnsaved();
+                } else {
+                    addSystemLog('⚠️ The model returned an empty response.');
+                }
                 return;
             }
 
@@ -596,6 +784,18 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                 const apiMessages = buildApiMessages(aspect, systemPrompt, extraContext, state.settings.maxContext);
                 const params = getGenerationParams(aspect);
 
+                // Native function calling: attach tool schemas when the provider
+                // supports it and the aspect has at least one trusted tool.
+                const nativeToolsEnabled = supportsNativeTools(state.settings.apiUrl);
+                if (nativeToolsEnabled) {
+                    const toolsParam = buildToolsParam(aspect);
+                    if (toolsParam.length > 0) params.tools = toolsParam;
+                }
+
+                // Capture native tool calls so we can route them through the
+                // existing executeJavaScriptTool pipeline unchanged.
+                let nativeToolCallsOverride = null;
+
                 let bubbleElement = null;
                 let placeholderRemoved = false;
 
@@ -622,17 +822,46 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                         }
                     },
                     onFallback: (reason, target) => {
+                        if (bubbleElement) {
+                            const wrapper = bubbleElement.closest('.message-wrapper.streaming') || bubbleElement.parentElement;
+                            if (wrapper) wrapper.remove();
+                            else bubbleElement.remove();
+                            bubbleElement = null;
+                            placeholderRemoved = false;
+                        }
                         updateSystemLog(writingId, `⚠️ *Primary provider failed (${reason}). Falling back to ${target.label}…*`);
+                    },
+                    onToolCall: (calls) => {
+                        // Convert native {name, args} objects to the same shape
+                        // parseToolCalls produces, so processAIResponseAndTools
+                        // can execute them without any changes.
+                        nativeToolCallsOverride = calls.map(c => ({
+                            fullMatch: `[Run Tool: ${c.name}(${c.args})]`,
+                            name: c.name,
+                            args: c.args
+                        }));
                     }
                 });
 
                 if (bubbleElement) updateStreamingBubble(bubbleElement, aiMessage, true);
+                const trimmedMsg = String(aiMessage || '').trim();
+                if (!trimmedMsg && bubbleElement) {
+                    const wrapper = bubbleElement.closest('.message-wrapper.streaming') || bubbleElement.parentElement;
+                    if (wrapper) wrapper.remove();
+                    bubbleElement = null;
+                }
                 if (!placeholderRemoved) {
                     dropPlaceholder();
                     renderChatMessages();
                 }
 
-                await processAIResponseAndTools(aiMessage, aspect);
+                // Native tool calls: the model signalled finish_reason='tool_calls'
+                // with no text content. Execute them through the same pipeline.
+                if (nativeToolCallsOverride) {
+                    await processAIResponseAndTools('', aspect, nativeToolCallsOverride);
+                } else if (String(aiMessage || '').trim()) {
+                    await processAIResponseAndTools(aiMessage, aspect);
+                }
 
             } catch (error) {
                 dropPlaceholder();

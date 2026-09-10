@@ -133,6 +133,23 @@ describe('Aspects Management', () => {
 
             spy.mockRestore();
         });
+
+        it('should bypass store read and apply background when forceDefault is true', async () => {
+            const persistModule = await import('../src/js/modules/persist.js');
+            const loadSpy = vi.spyOn(persistModule, 'loadAspects').mockRejectedValue(new Error('IndexedDB corrupted'));
+            const uiModule = await import('../src/js/modules/ui.js');
+
+            await aspects.loadDefaultAspects({ forceDefault: true });
+
+            expect(loadSpy).not.toHaveBeenCalled();
+            expect(state.aspects.length).toBe(1);
+            expect(state.aspects[0].id).toBe('studio-guide');
+            expect(state.currentAspectId).toBe('studio-guide');
+            expect(uiModule.applyAspectBackground).toHaveBeenCalled();
+            expect(uiModule.showChatView).toHaveBeenCalled();
+
+            loadSpy.mockRestore();
+        });
     });
 
     describe('Aspect Creation', () => {
@@ -326,11 +343,19 @@ describe('Aspects Management', () => {
 
                 const ui = await import('../src/js/modules/ui.js');
                 expect(ui.showChatView).toHaveBeenCalled();
+                expect(ui.applyAspectBackground).toHaveBeenCalled();
                 expect(ui.markChangesUnsaved).toHaveBeenCalled();
             });
 
             it('should not delete if not confirmed', () => {
                 window.confirm.mockReturnValueOnce(false);
+                aspects.deleteCurrentAspect();
+
+                expect(state.aspects.length).toBe(2);
+            });
+
+            it('should safely do nothing if currentAspectId is not found', () => {
+                state.currentAspectId = 'nonexistent';
                 aspects.deleteCurrentAspect();
 
                 expect(state.aspects.length).toBe(2);

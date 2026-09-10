@@ -1,5 +1,5 @@
 import { getCurrentAspect } from './aspects.js';
-import { updateAspectData } from './aspects.js';
+import { updateAspectData, sanitizeToolName, RESERVED_TOOL_NAMES, hashToolCode } from './aspects.js';
 import { markChangesUnsaved, showToast } from './ui.js';
 
 let nodes = [];
@@ -9,6 +9,17 @@ let dragNode = null;
 let dragOffset = { x: 0, y: 0 };
 let isDrawingConnection = false;
 let connectionStartNodeId = null;
+let nodeCounter = 0;
+
+export function resetWorkflowStateForTesting() {
+    nodes = [];
+    connections = [];
+    isDragging = false;
+    dragNode = null;
+    isDrawingConnection = false;
+    connectionStartNodeId = null;
+    nodeCounter = 0;
+}
 
 export function openWorkflowModal() {
     document.getElementById('workflow-modal').classList.remove('hidden');
@@ -27,7 +38,7 @@ export function closeWorkflowModal() {
 }
 
 export function addWorkflowNode(type, initX = 300, initY = 300) {
-    const id = 'node_' + Date.now();
+    const id = 'node_' + Date.now() + '_' + (++nodeCounter);
     let name = '';
     let inputs = [];
     let outputs = ['Next'];
@@ -209,74 +220,116 @@ window.addWorkflowNode = addWorkflowNode;
 window.openWorkflowModal = openWorkflowModal;
 window.closeWorkflowModal = closeWorkflowModal;
 
-export function saveWorkflowAsTool() {
-    const nameInput = document.getElementById('workflow-name-input').value.trim();
-    if (!nameInput) {
-        window.showToast("Please enter a tool name.", "error");
-        return;
-    }
+export function compileWorkflow(nodesList, connectionsList, configGetter) {
+    const getConfig = configGetter || ((nodeId, field) => {
+        const el = document.getElementById(`config_${nodeId}_${field}`);
+        return el ? el.value : '';
+    });
 
-    let toolName = nameInput;
-    if (!toolName.endsWith('.js')) toolName += '.js';
-
-    // Simple Compiler: BFS or topological sort from Start node
     let compiledCode = `// Generated via Visual Workflow Builder\nasync function executeTool(args, state) {\n    let currentData = args;\n    let result = null;\n`;
 
-    let currentNode = nodes.find(n => n.type === 'start');
+    let currentNode = nodesList.find(n => n.type === 'start');
     if (!currentNode) {
-        window.showToast("Start node missing.", "error");
-        return;
+        return { success: false, error: "Start node missing." };
     }
 
     let visited = new Set();
     while (currentNode) {
         if (visited.has(currentNode.id)) {
-            window.showToast("Cycle detected in workflow, this simple compiler only supports linear flows.", "error");
-            return;
+            return {
+                success: false,
+                error: "Cycle detected in workflow, this simple compiler only supports linear flows."
+            };
         }
         visited.add(currentNode.id);
 
         if (currentNode.type === 'fetch') {
-            const urlVal = document.getElementById(`config_${currentNode.id}_url`).value;
+            const urlVal = getConfig(currentNode.id, 'url');
             compiledCode += `\n    try {\n        const url = ${JSON.stringify(urlVal)} || currentData.url || currentData;\n        const resp = await fetch(url);\n        currentData = await resp.text();\n    } catch (e) {\n        return { error: 'Fetch failed: ' + e.message };\n    }\n`;
         } else if (currentNode.type === 'extract') {
-            const regexVal = document.getElementById(`config_${currentNode.id}_regex`).value;
+            const regexVal = getConfig(currentNode.id, 'regex');
+            try {
+                new RegExp(regexVal);
+            } catch (err) {
+                return {
+                    success: false,
+                    error: `Invalid regular expression in Extract node: ${err.message}`
+                };
+            }
             compiledCode += `\n    try {\n        const rgx = new RegExp(${JSON.stringify(regexVal)});\n        const m = currentData.match(rgx);\n        currentData = m ? m[1] || m[0] : null;\n    } catch (e) {\n        return { error: 'Extraction failed: ' + e.message };\n    }\n`;
         } else if (currentNode.type === 'memory') {
-            const keyVal = document.getElementById(`config_${currentNode.id}_key`).value;
+            const keyVal = getConfig(currentNode.id, 'key');
             compiledCode += `\n    try {\n        const key = ${JSON.stringify(keyVal)};\n        await new Promise((resolve) => {\n            const messageId = Date.now().toString() + Math.random();\n            const listener = (e) => {\n                if (e.data.type === 'memoryWriteComplete' && e.data.messageId === messageId) {\n                    self.removeEventListener('message', listener);\n                    resolve();\n                }\n            };\n            self.addEventListener('message', listener);\n            self.postMessage({ type: 'writeMemory', key: key, value: currentData, messageId: messageId });\n        });\n    } catch (e) {\n        return { error: 'Memory save failed: ' + e.message };\n    }\n`;
         } else if (currentNode.type === 'custom') {
-            const codeVal = document.getElementById(`config_${currentNode.id}_code`).value;
+            const codeVal = getConfig(currentNode.id, 'code');
             compiledCode += `\n    try {\n        const customFn = async (input) => {\n            ${codeVal}\n        };\n        currentData = await customFn(currentData);\n    } catch (e) {\n        return { error: 'Custom JS failed: ' + e.message };\n    }\n`;
         }
 
-        const nextConn = connections.find(c => c.from === currentNode.id);
+        const nextConn = connectionsList.find(c => c.from === currentNode.id);
         if (nextConn) {
-            currentNode = nodes.find(n => n.id === nextConn.to);
+            currentNode = nodesList.find(n => n.id === nextConn.to);
         } else {
             currentNode = null;
         }
     }
 
     compiledCode += `\n    return { success: true, finalData: currentData };\n}`;
+    return { success: true, code: compiledCode };
+}
+
+export function saveWorkflowAsTool() {
+    const nameInput = document.getElementById('workflow-name-input')?.value?.trim() || '';
+    if (!nameInput) {
+        showToast("Please enter a tool name.", "error");
+        return;
+    }
+
+    let toolName = sanitizeToolName(nameInput);
+    if (!toolName.endsWith('.js')) toolName += '.js';
+
+    const isReserved = RESERVED_TOOL_NAMES.some(r => r.toLowerCase() === toolName.toLowerCase());
+    if (isReserved) {
+        showToast(`"${toolName}" is reserved for system tools. Please use a different name.`, "error");
+        return;
+    }
+
+    const compileResult = compileWorkflow(nodes, connections);
+    if (!compileResult.success) {
+        showToast(compileResult.error, "error");
+        return;
+    }
 
     const aspect = getCurrentAspect();
-    if (aspect) {
-        const existingIdx = aspect.tools.findIndex(t => t.name === toolName);
-        if (existingIdx !== -1) {
-            aspect.tools[existingIdx].code = compiledCode;
-        } else {
-            aspect.tools.push({
-                name: toolName,
-                code: compiledCode
-            });
-        }
-
-        markChangesUnsaved();
-        // Compiled workflow tools are saved without a trustedHash, so like any
-        // freshly added tool they stay inert until reviewed and enabled.
-        showToast(`Saved "${toolName}". Open it in the tool editor and enable it before it can run.`);
-        closeWorkflowModal();
+    if (!aspect) {
+        showToast("No active Aspect selected.", "error");
+        return;
     }
+
+    if (!Array.isArray(aspect.tools)) {
+        aspect.tools = [];
+    }
+
+    const existingIdx = aspect.tools.findIndex(t => t.name === toolName);
+    if (existingIdx !== -1) {
+        aspect.tools[existingIdx].code = compileResult.code;
+        // Re-stamp trustedHash so a regenerated workflow tool is immediately
+        // runnable — the user authored it locally, so it is implicitly reviewed.
+        aspect.tools[existingIdx].trustedHash = hashToolCode(compileResult.code);
+    } else {
+        // Stamp trustedHash at creation: the code was generated from the user's
+        // own canvas configuration on this machine, satisfying the review gate
+        // (F-07). Without this the tool stays silently inert until the user
+        // opens it in the editor and clicks Enable.
+        aspect.tools.push({
+            name: toolName,
+            code: compileResult.code,
+            state: {},
+            trustedHash: hashToolCode(compileResult.code)
+        });
+    }
+
+    markChangesUnsaved();
+    showToast(`Saved "${toolName}". It is ready to run.`);
+    closeWorkflowModal();
 }
 window.saveWorkflowAsTool = saveWorkflowAsTool;

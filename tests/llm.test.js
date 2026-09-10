@@ -88,6 +88,25 @@ describe('readSSEStream', () => {
         ]));
         expect(full).toBe('win');
     });
+
+    it('handles multi-part content arrays in delta', async () => {
+        const full = await readSSEStream(readerFrom([
+            'data: {"choices":[{"delta":{"content":[{"type":"text","text":"multi-"},{"type":"text","text":"part"}]}}]}\n'
+        ]));
+        expect(full).toBe('multi-part');
+    });
+
+    it('extracts legacy text and delta.text streams', async () => {
+        const full1 = await readSSEStream(readerFrom([
+            'data: {"choices":[{"delta":{"text":"delta-text"}}]}\n'
+        ]));
+        expect(full1).toBe('delta-text');
+
+        const full2 = await readSSEStream(readerFrom([
+            'data: {"choices":[{"text":"choice-text"}]}\n'
+        ]));
+        expect(full2).toBe('choice-text');
+    });
 });
 
 describe('target resolution', () => {

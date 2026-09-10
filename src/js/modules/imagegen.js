@@ -21,8 +21,11 @@ export function buildIconPrompt(description) {
 function blobToDataURL(blob) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = () => reject(new Error('Could not read the generated image.'));
+        const timeout = setTimeout(() => {
+            reject(new Error('Image conversion timed out.'));
+        }, 15000);
+        reader.onload = () => { clearTimeout(timeout); resolve(reader.result); };
+        reader.onerror = () => { clearTimeout(timeout); reject(new Error('Could not read the generated image.')); };
         reader.readAsDataURL(blob);
     });
 }
@@ -55,7 +58,6 @@ export async function generateIcon(description, opts = {}) {
         if (err.name === 'AbortError') throw new Error('Image generation timed out or was cancelled.');
         throw new Error('Could not reach the image service. Check your connection and try again.');
     }
-    clearTimeout(timer);
 
     if (!response.ok) {
         throw new Error(`Image service returned ${response.status}. Try a different description.`);
@@ -67,5 +69,11 @@ export async function generateIcon(description, opts = {}) {
 
     const blob = await response.blob();
     if (!blob.size) throw new Error('The image service returned an empty image.');
-    return blobToDataURL(blob);
+    try {
+        return await blobToDataURL(blob);
+    } catch (err) {
+        throw err;
+    } finally {
+        clearTimeout(timer);
+    }
 }

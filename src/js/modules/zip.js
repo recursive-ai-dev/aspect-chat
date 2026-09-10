@@ -1,4 +1,4 @@
-import { showChatView } from './ui.js';
+import { showChatView, applyAspectBackground } from './ui.js';
 import { renderAspectList } from './aspects.js';
 import { getCurrentAspect } from './aspects.js';
 import { markChangesSaved } from './state.js';
@@ -6,6 +6,8 @@ import { state } from './state.js';
 import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
 import { normalizeAspect, sanitizeToolName, RESERVED_TOOL_NAMES } from './aspects.js';
 import { newId } from './conversations.js';
+
+export const MAX_ASPECT_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 
 /**
  * Make imported tool filenames safe and non-deceptive: sanitised charset, no
@@ -158,8 +160,14 @@ function loadJSZip() {
         }
 
         export async function loadAspectFile(event) {
-            const file = event.target.files[0];
+            const file = event?.target?.files?.[0];
             if (!file) return;
+
+            if (Number.isFinite(file.size) && file.size > MAX_ASPECT_FILE_SIZE) {
+                window.showToast('Aspect file exceeds the 50MB size limit.', 'error');
+                if (event.target) event.target.value = '';
+                return;
+            }
 
             try {
                 const JSZip = await loadJSZip();
@@ -188,9 +196,15 @@ function loadJSZip() {
                 }
 
                 let background = "";
-                if (zip.file("Background.jpeg")) {
-                    const imgData = await zip.file("Background.jpeg").async("base64");
-                    background = `data:image/jpeg;base64,${imgData}`;
+                for (const candidate of ["Background.jpeg", "Background.jpg", "Background.png", "Background.webp"]) {
+                    const entry = zip.file(candidate);
+                    if (entry) {
+                        const imgData = await entry.async("base64");
+                        const ext = candidate.split('.').pop().toLowerCase();
+                        const mime = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+                        background = `data:${mime};base64,${imgData}`;
+                        break;
+                    }
                 }
 
                 const tools = [];
@@ -211,7 +225,7 @@ function loadJSZip() {
                     Object.keys(toolsFolder.files).forEach(path => {
                         if (path.endsWith(".js") && !toolsFolder.files[path].dir) {
                             const p = toolsFolder.files[path].async("string").then(code => {
-                                const toolName = path.split('/').pop();
+                                const toolName = path.replace(/\\/g, '/').split('/').pop();
                                 tools.push({
                                     // name is re-resolved after all tools load
                                     // (see resolveImportedToolNames)
@@ -318,6 +332,10 @@ function loadJSZip() {
 
                 state.aspects.push(newAspect);
                 state.currentAspectId = newAspect.id;
+                try {
+                    localStorage.setItem('currentAspectId', newAspect.id);
+                } catch { /* storage full / blocked */ }
+                applyAspectBackground();
                 
                 // Import raw knowledge files to IndexedDB
                 const knowledgeFilesFolder = zip.folder("Knowledge/Files");
@@ -329,7 +347,8 @@ function loadJSZip() {
                             promises.push(
                                 zipEntry.async('string').then(fileText => {
                                     // Extract just the filename from relative path (if nested, we flatten for IndexedDB)
-                                    const fileName = relativePath.split('/').pop() || relativePath;
+                                    const normalizedPath = relativePath.replace(/\\/g, '/');
+                                    const fileName = normalizedPath.split('/').pop() || normalizedPath;
                                     return saveKnowledgeFile(newAspect.id, fileName, fileText);
                                 })
                             );
@@ -383,6 +402,7 @@ function loadJSZip() {
             const safeDesc = esc(aspect.description);
             const safeInstructions = esc(aspect.instructions);
             const safeIcon = esc(safeIconSrc(aspect.icon));
+            const iconHtml = safeIcon ? `<img class="icon" src="${safeIcon}" alt="Aspect Icon">\n        ` : '';
 
             const htmlContent = `<!DOCTYPE html>
 <html lang="en">
@@ -428,8 +448,7 @@ function loadJSZip() {
 </head>
 <body>
     <div class="card">
-        <img class="icon" src="${safeIcon}" alt="Aspect Icon">
-        <h1>${safeName}</h1>
+        ${iconHtml}<h1>${safeName}</h1>
         <p class="desc">${safeDesc}</p>
         <div class="details">
             <strong>System Prompt / Instructions:</strong><br><br>

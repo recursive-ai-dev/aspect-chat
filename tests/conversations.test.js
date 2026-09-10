@@ -184,9 +184,16 @@ describe('conversation lifecycle', () => {
 
         renameConversation(aspect, id, '  Custom name  ');
         expect(aspect.conversations[0].title).toBe('Custom name');
+        expect(aspect.conversations[0].titleLocked).toBe(true);
 
         renameConversation(aspect, id, '   ');
         expect(aspect.conversations[0].title).toBe('Derived name');
+        expect(aspect.conversations[0].titleLocked).toBe(false);
+
+        lockConversationTitle(aspect, id, true);
+        expect(aspect.conversations[0].titleLocked).toBe(true);
+        lockConversationTitle(aspect, id, false);
+        expect(aspect.conversations[0].titleLocked).toBe(false);
     });
 });
 

@@ -96,7 +96,7 @@ export async function storageStartFresh() {
     armPersistence();
     const overlay = document.getElementById('storage-error-overlay');
     if (overlay) overlay.classList.add('hidden');
-    await loadDefaultAspects();
+    await loadDefaultAspects({ forceDefault: true });
 }
 window.storageStartFresh = storageStartFresh;
 
@@ -685,7 +685,6 @@ export function promptRenameConversation(conversationId) {
     const next = window.prompt('Rename this chat:', conv.title || '');
     if (next === null) return;
     renameConversation(aspect, conversationId, next);
-    lockConversationTitle(aspect, conversationId);
     markChangesUnsaved();
     renderConversationList();
 }

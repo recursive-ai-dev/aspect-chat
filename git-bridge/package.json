@@ -1,0 +1,12 @@
+{
+  "name": "aspect-chat-git-bridge",
+  "version": "1.0.0",
+  "description": "Local git inspection bridge for Aspect Studio GitInspector tool",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

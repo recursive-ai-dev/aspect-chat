@@ -138,14 +138,16 @@ describe('Database and Cache module - uploadKnowledgeFiles', () => {
 
         await uploadKnowledgeFiles(mockEvent);
 
-        // Verify the error was caught and logged/shown
+        // Verify the error was caught and logged/shown.
+        // Since the batch refactor, processing errors are reported as save errors
+        // (the file never reaches the batch so the message uses "Failed to save").
         expect(console.error).toHaveBeenCalledWith(
             "Error processing file",
             "error-file.txt",
             expect.any(Error)
         );
         expect(window.showToast).toHaveBeenCalledWith(
-            "Failed to process error-file.txt: Simulated read error",
+            "Failed to save error-file.txt: Simulated read error",
             "error"
         );
     });
@@ -192,10 +194,12 @@ describe('Database and Cache module - uploadKnowledgeFiles', () => {
         expect(aspects.updateAspectData).not.toHaveBeenCalled();
     });
 
-    it('should catch error when saveKnowledgeFile fails', async () => {
-        // Since we can't easily mock saveKnowledgeFile, let's just make indexedDB put fail.
+    it('should catch error when saveKnowledgeFileBatch fails', async () => {
+        // Intercept IDBObjectStore.put to simulate a storage failure.
+        // The new batch implementation catches errors at the batch level.
         const originalPut = IDBObjectStore.prototype.put;
-        IDBObjectStore.prototype.put = vi.fn().mockImplementation(() => {
+        IDBObjectStore.prototype.put = vi.fn().mockImplementation(function (...args) {
+            IDBObjectStore.prototype.put = originalPut; // Restore immediately.
             throw new Error('Simulated IDB error');
         });
 
@@ -209,20 +213,99 @@ describe('Database and Cache module - uploadKnowledgeFiles', () => {
         };
 
         await uploadKnowledgeFiles(mockEvent);
-        
-        // Let promises resolve
-        await new Promise(r => setTimeout(r, 10));
 
+        // The batch refactor logs at the batch level, not per-file.
         expect(console.error).toHaveBeenCalledWith(
-            "Error saving file",
-            "test.txt",
+            "Error saving knowledge file batch",
             expect.any(Error)
         );
         expect(window.showToast).toHaveBeenCalledWith(
-            "Failed to save test.txt: Simulated IDB error",
+            expect.stringContaining("Simulated IDB error"),
             "error"
         );
+    });
 
-        IDBObjectStore.prototype.put = originalPut;
+    it('should reject files exceeding MAX_KNOWLEDGE_FILE_SIZE (15MB)', async () => {
+        const mockEvent = {
+            target: {
+                files: [
+                    { name: 'huge.txt', size: 16 * 1024 * 1024, text: vi.fn() }
+                ],
+                value: 'some-value'
+            }
+        };
+        await uploadKnowledgeFiles(mockEvent);
+        expect(window.showToast).toHaveBeenCalledWith(
+            'File "huge.txt" exceeds the maximum allowed size of 15MB.',
+            'error'
+        );
+    });
+
+    it('should warn when a file has empty or whitespace-only content', async () => {
+        const mockEvent = {
+            target: {
+                files: [
+                    { name: 'blank.txt', size: 10, text: vi.fn().mockResolvedValue('   \n  ') }
+                ],
+                value: 'some-value'
+            }
+        };
+        await uploadKnowledgeFiles(mockEvent);
+        expect(window.showToast).toHaveBeenCalledWith(
+            'File "blank.txt" contains no readable text or is empty.',
+            'warning'
+        );
+    });
+
+    it('should handle files without an extension', async () => {
+        const mockEvent = {
+            target: {
+                files: [
+                    { name: 'LICENSE', size: 100 }
+                ],
+                value: 'some-value'
+            }
+        };
+        await uploadKnowledgeFiles(mockEvent);
+        expect(window.showToast).toHaveBeenCalledWith(
+            'Unsupported file type: (none)',
+            'error'
+        );
+    });
+
+    it('should call pdf.destroy after extracting pdf content', async () => {
+        const destroyMock = vi.fn();
+        const pdfjsLib = await import('pdfjs-dist');
+        pdfjsLib.getDocument.mockReturnValueOnce({
+            promise: Promise.resolve({
+                numPages: 1,
+                getPage: vi.fn().mockResolvedValue({
+                    getTextContent: vi.fn().mockResolvedValue({ items: [{ str: 'page text' }] })
+                }),
+                destroy: destroyMock
+            })
+        });
+
+        const mockEvent = {
+            target: {
+                files: [
+                    { name: 'document.pdf', size: 1024, arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(8)) }
+                ],
+                value: 'some-value'
+            }
+        };
+
+        await uploadKnowledgeFiles(mockEvent);
+        expect(destroyMock).toHaveBeenCalled();
+    });
+
+    it('should reconnect dynamically after resetDatabaseForTesting', async () => {
+        const { resetDatabaseForTesting } = await import('../src/js/modules/idb.js');
+        const { saveMemory, getMemory } = await import('../src/js/modules/db.js');
+        await resetDatabaseForTesting();
+        await saveMemory('reconnect-aspect', { test: true });
+        const mem = await getMemory('reconnect-aspect');
+        expect(mem).toEqual({ test: true });
     });
 });
+

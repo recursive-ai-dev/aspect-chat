@@ -177,7 +177,7 @@ When it kicks in, the chat says which provider answered and why. A user-initiate
 
 ```bash
 npm run dev       # dev server
-npm test          # 304 tests
+npm test          # 410 tests (22 test suites)
 npm run build     # production build to dist/
 npm run preview   # serve the build
 ```
@@ -187,17 +187,28 @@ MSW for tests, CodeMirror 6 for the tool editor, marked + DOMPurify for renderin
 
 ```
 src/js/modules/
-  providers.js      Provider catalogue, local-endpoint detection, connection test
-  llm.js            Streaming transport (HTTP + WebLLM) and fallback
-  webllm.js         In-browser engine lifecycle
-  conversations.js  Per-Aspect conversation model
-  persist.js        IndexedDB storage and localStorage migration
-  idb.js            Shared database connection
-  aspects.js        Aspect CRUD and templates
-  tools.js          Chat loop, tool execution sandbox
-  chat.js           Message rendering
-  ui.js             Views, editor, conversation list
-  settings.js       Settings modal
+  providers.js        Provider catalogue, local-endpoint detection, connection test
+  llm.js              Streaming transport (HTTP + WebLLM) and fallback
+  webllm.js           In-browser engine lifecycle
+  conversations.js    Per-Aspect conversation model
+  persist.js          IndexedDB storage and localStorage migration
+  idb.js              Shared database connection
+  aspects.js          Aspect CRUD, cloning, templates, normalization
+  tools.js            Chat loop, tool execution orchestration, logging
+  chat.js             Message rendering, markdown sanitization, bubble actions
+  ui.js               Views, editor, conversation list, preset backgrounds
+  settings.js         Settings modal, model fetching, API configuration
+  backup.js           Full library export/import and automatic snapshots
+  db.js               IndexedDB file storage for knowledge files and memory
+  imagegen.js         In-browser / remote aspect avatar generation
+  init.js             Application bootstrapper and storage error recovery
+  state.js            Centralized reactive state store and debounced persistence
+  systemTools.js      Built-in tool definitions (Calculator, Weather, DateTime, Memory, SummonAspect)
+  themes.js           Theme definitions and active theme switcher
+  toolEditor.js       CodeMirror 6 tool authoring environment
+  toolSandbox.js      Hardened iframe sandbox and broker for tool execution
+  workflowBuilder.js  Visual tool node flow editor
+  zip.js              JSZip packaging for .aspect bundles and standalone webpage exporter
 ```
 
 Fonts are bundled via `@fontsource` rather than fetched from a CDN — a local-first

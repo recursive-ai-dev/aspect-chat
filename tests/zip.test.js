@@ -38,7 +38,8 @@ vi.mock('../src/js/modules/state.js', () => ({
 }));
 
 vi.mock('../src/js/modules/ui.js', () => ({
-    showChatView: vi.fn()
+    showChatView: vi.fn(),
+    applyAspectBackground: vi.fn()
 }));
 
 vi.mock('../src/js/modules/db.js', () => ({
@@ -438,4 +439,113 @@ describe('Zip Module', () => {
         // Verify knowledge files
         expect(mockKnowledgeFolderFile).toHaveBeenCalledWith('file1.txt', 'Knowledge 1');
     });
+
+    it('rejects files exceeding MAX_ASPECT_FILE_SIZE (50MB)', async () => {
+        const mockFile = new File([''], 'huge.aspect');
+        Object.defineProperty(mockFile, 'size', { value: 60 * 1024 * 1024 });
+        const event = {
+            target: {
+                files: [mockFile],
+                value: 'huge.aspect'
+            }
+        };
+
+        await loadAspectFile(event);
+
+        expect(window.showToast).toHaveBeenCalledWith('Aspect file exceeds the 50MB size limit.', 'error');
+        expect(event.target.value).toBe('');
+    });
+
+    it('normalizes Windows backslashes in tool and knowledge file paths', async () => {
+        const mockZip = {
+            file: vi.fn((path) => {
+                if (path === 'Name.md') return { async: vi.fn().mockResolvedValue('Windows Zip') };
+                return null;
+            }),
+            folder: vi.fn((path) => {
+                if (path === 'Tools') {
+                    return {
+                        file: vi.fn(() => null),
+                        files: {
+                            'Tools\\nested\\custom_tool.js': {
+                                dir: false,
+                                async: vi.fn().mockResolvedValue('console.log("win tool");')
+                            }
+                        }
+                    };
+                }
+                if (path === 'Knowledge/Files') {
+                    return {
+                        files: {
+                            'Knowledge\\Files\\nested\\notes.txt': {
+                                dir: false,
+                                async: vi.fn().mockResolvedValue('win notes')
+                            }
+                        }
+                    };
+                }
+                return null;
+            })
+        };
+
+        JSZip.loadAsync.mockResolvedValueOnce(mockZip);
+
+        const mockFile = new File(['content'], 'windows.aspect');
+        const event = { target: { files: [mockFile], value: 'windows.aspect' } };
+
+        await loadAspectFile(event);
+
+        expect(state.aspects.length).toBe(1);
+        expect(state.aspects[0].tools[0].name).toBe('custom_tool.js');
+        expect(saveKnowledgeFile).toHaveBeenCalledWith(
+            state.aspects[0].id,
+            'notes.txt',
+            'win notes'
+        );
+    });
+
+    it('supports Background.png with image/png mime', async () => {
+        const mockZip = {
+            file: vi.fn((path) => {
+                if (path === 'Name.md') return { async: vi.fn().mockResolvedValue('PNG Aspect') };
+                if (path === 'Background.png') return { async: vi.fn().mockResolvedValue('pngbase64data'), name: 'Background.png' };
+                return null;
+            }),
+            folder: vi.fn(() => null)
+        };
+        JSZip.loadAsync.mockResolvedValueOnce(mockZip);
+
+        const mockFile = new File(['content'], 'png.aspect');
+        const event = { target: { files: [mockFile], value: 'png.aspect' } };
+
+        await loadAspectFile(event);
+
+        expect(state.aspects.length).toBe(1);
+        expect(state.aspects[0].background).toBe('data:image/png;base64,pngbase64data');
+    });
+
+    it('omits broken img tag in webpage export when icon is empty', async () => {
+        let createdBlobContent = '';
+        const originalBlob = global.Blob;
+        global.Blob = class {
+            constructor(parts, options) {
+                createdBlobContent = parts.join('');
+                this.content = parts;
+                this.options = options;
+            }
+        };
+
+        getCurrentAspect.mockReturnValue({
+            name: 'No Icon Aspect',
+            description: 'Desc',
+            instructions: 'Instr',
+            icon: ''
+        });
+
+        await exportAspectToWebpage();
+
+        expect(createdBlobContent).not.toContain('<img class="icon"');
+        global.Blob = originalBlob;
+    });
 });
+

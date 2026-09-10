@@ -383,11 +383,11 @@ describe('processAIResponseAndTools - multi-input and edge cases', () => {
         vi.spyOn(tools, 'sendAIRequest').mockResolvedValue(undefined);
     });
 
-    it('coerces null/undefined message to empty string and stores assistant message', async () => {
+    it('coerces null/undefined message to empty string and skips empty assistant message', async () => {
         const aspect = aspectWithHistory();
         aspectsModule.getCurrentAspect.mockReturnValue(aspect);
         await tools.processAIResponseAndTools(null, aspect);
-        expect(aspect.chatHistory.some(m => m.role === 'assistant' && m.content === '')).toBe(true);
+        expect(aspect.chatHistory.some(m => m.role === 'assistant')).toBe(false);
     });
 
     it('pushes assistant message when there are no tool calls', async () => {

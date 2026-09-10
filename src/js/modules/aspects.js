@@ -195,32 +195,34 @@ import { normalizeConversations, newId } from './conversations.js';
         }
 
 
-        export async function loadDefaultAspects() {
+        export async function loadDefaultAspects({ forceDefault = false } = {}) {
             let saved = [];
-            try {
-                saved = await loadAspects();
-            } catch (e) {
-                console.error("Failed to load saved aspects", e);
-                // A genuine read failure. Do NOT fall through to building and
-                // persisting a fresh default library — the debounced save would
-                // then purge the rows we could not read. Surface it and stop.
-                if (typeof window !== 'undefined' && typeof window.showStorageError === 'function') {
-                    window.showStorageError();
+            if (!forceDefault) {
+                try {
+                    saved = await loadAspects();
+                } catch (e) {
+                    console.error("Failed to load saved aspects", e);
+                    // A genuine read failure. Do NOT fall through to building and
+                    // persisting a fresh default library — the debounced save would
+                    // then purge the rows we could not read. Surface it and stop.
+                    if (typeof window !== 'undefined' && typeof window.showStorageError === 'function') {
+                        window.showStorageError();
+                    }
+                    state.aspects = [];
+                    state.currentAspectId = null;
+                    return;
                 }
-                state.aspects = [];
-                state.currentAspectId = null;
-                return;
-            }
 
-            if (Array.isArray(saved) && saved.length > 0) {
-                state.aspects = saved.map(a => normalizeAspect(a));
-                const lastId = (typeof localStorage !== 'undefined') && localStorage.getItem('currentAspectId');
-                const restored = lastId && state.aspects.find(a => a.id === lastId);
-                state.currentAspectId = restored ? restored.id : state.aspects[0].id;
-                renderAspectList();
-                applyAspectBackground();
-                showChatView();
-                return;
+                if (Array.isArray(saved) && saved.length > 0) {
+                    state.aspects = saved.map(a => normalizeAspect(a));
+                    const lastId = (typeof localStorage !== 'undefined') && localStorage.getItem('currentAspectId');
+                    const restored = lastId && state.aspects.find(a => a.id === lastId);
+                    state.currentAspectId = restored ? restored.id : state.aspects[0].id;
+                    renderAspectList();
+                    applyAspectBackground();
+                    showChatView();
+                    return;
+                }
             }
 
             // Create Studio Guide default
@@ -337,6 +339,7 @@ async function executeTool(args, state) {
             state.currentAspectId = defaultAspect.id;
             persistAspects();
             renderAspectList();
+            applyAspectBackground();
             showChatView();
         }
 
@@ -730,10 +733,9 @@ async function executeTool(args, state) {
             if (confirm("Are you sure you want to delete this Aspect? All history and tools will be lost.")) {
                 const deletedAspectId = state.currentAspectId;
                 const index = state.aspects.findIndex(a => a.id === deletedAspectId);
+                if (index === -1) return;
                 state.aspects.splice(index, 1);
-                state.currentAspectId = state.aspects[0].id;
-                renderAspectList();
-                showChatView();
+                selectAspect(state.aspects[0].id);
                 markChangesUnsaved();
 
                 try {

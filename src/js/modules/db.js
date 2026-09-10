@@ -19,184 +19,294 @@ function loadMammoth() {
     return import('mammoth');
 }
 
-        // The database connection (including the Aspect store) lives in idb.js
-        // so there is a single schema-upgrade handler for the whole app.
-        const dbPromise = getDB();
+// The database connection (including the Aspect store) lives in idb.js
+// so there is a single schema-upgrade handler for the whole app.
+export const MAX_KNOWLEDGE_FILE_SIZE = 15 * 1024 * 1024; // 15 MB
 
-        export async function saveMemory(aspectId, memoryObj) {
-            const db = await dbPromise;
-            return new Promise((resolve, reject) => {
-                const tx = db.transaction('memory', 'readwrite');
-                tx.objectStore('memory').put({ aspectId, memory: memoryObj });
-                tx.oncomplete = () => resolve();
-                tx.onerror = (e) => reject(e.target.error);
-            });
+/**
+ * Return a subset of a memory object whose keys start with `prefix/` or
+ * exactly equal `prefix`, with the prefix (and trailing slash) stripped.
+ *
+ * E.g. getMemoryNamespace({ "projects/app/todos": [1,2] }, "projects/app")
+ *      → { "todos": [1,2] }
+ *
+ * @param {Object} memory  The full memory object for an Aspect.
+ * @param {string} prefix  Namespace prefix, e.g. "projects/myapp".
+ * @returns {Object}
+ */
+export function getMemoryNamespace(memory, prefix) {
+    if (!memory || typeof memory !== 'object') return {};
+    if (!prefix || typeof prefix !== 'string') return {};
+    const normalized = prefix.endsWith('/') ? prefix : prefix + '/';
+    const result = {};
+    for (const key of Object.keys(memory)) {
+        if (key.startsWith(normalized)) {
+            result[key.slice(normalized.length)] = memory[key];
         }
+    }
+    return result;
+}
 
-        export async function getMemory(aspectId) {
-            const db = await dbPromise;
-            return new Promise((resolve, reject) => {
-                const tx = db.transaction('memory', 'readonly');
-                const store = tx.objectStore('memory');
-                const request = store.get(aspectId);
-                request.onsuccess = () => {
-                    resolve(request.result ? request.result.memory : {});
-                };
-                request.onerror = (e) => reject(e.target.error);
-            });
-        }
+/**
+ * Return a sorted array of keys in a memory object, optionally filtered to
+ * only keys that start with `prefix`.
+ *
+ * @param {Object} memory   The full memory object for an Aspect.
+ * @param {string} [prefix] Optional namespace prefix to filter by.
+ * @returns {string[]}
+ */
+export function listMemoryKeys(memory, prefix) {
+    if (!memory || typeof memory !== 'object') return [];
+    const keys = Object.keys(memory);
+    const filtered = prefix
+        ? keys.filter(k => k.startsWith(prefix))
+        : keys;
+    return filtered.sort();
+}
+
+export async function saveMemory(aspectId, memoryObj) {
+    if (!aspectId) return;
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction('memory', 'readwrite');
+        tx.objectStore('memory').put({ aspectId, memory: memoryObj });
+        tx.oncomplete = () => resolve();
+        tx.onerror = (e) => reject(e.target.error);
+    });
+}
+
+export async function getMemory(aspectId) {
+    if (!aspectId) return {};
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction('memory', 'readonly');
+        const store = tx.objectStore('memory');
+        const request = store.get(aspectId);
+        request.onsuccess = () => {
+            resolve(request.result ? request.result.memory : {});
+        };
+        request.onerror = (e) => reject(e.target.error);
+    });
+}
 
 
-        // In-memory cache for performance
-        let knowledgeCache = {}; // aspectId -> Array of file objects
-        let isCacheInitialized = false;
-        let initCachePromise = null;
+// In-memory cache for performance
+let knowledgeCache = {}; // aspectId -> Array of file objects
+let isCacheInitialized = false;
+let initCachePromise = null;
 
-        async function initCache() {
-            if (isCacheInitialized) return;
-            if (initCachePromise) return initCachePromise;
+async function initCache() {
+    if (isCacheInitialized) return;
+    if (initCachePromise) return initCachePromise;
 
-            initCachePromise = (async () => {
-                const db = await dbPromise;
-                return new Promise((resolve, reject) => {
-                    const tx = db.transaction('files', 'readonly');
-                    const store = tx.objectStore('files');
-                    const request = store.getAll();
-                    request.onsuccess = () => {
-                        knowledgeCache = {};
-                        request.result.forEach(f => {
-                            if (!knowledgeCache[f.aspectId]) knowledgeCache[f.aspectId] = [];
-                            knowledgeCache[f.aspectId].push(f);
-                        });
-                        isCacheInitialized = true;
-                        initCachePromise = null;
-                        resolve();
-                    };
-                    request.onerror = (e) => {
-                        initCachePromise = null;
-                        reject(e.target.error);
-                    };
+    initCachePromise = (async () => {
+        const db = await getDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction('files', 'readonly');
+            const store = tx.objectStore('files');
+            const request = store.getAll();
+            request.onsuccess = () => {
+                knowledgeCache = {};
+                request.result.forEach(f => {
+                    if (!knowledgeCache[f.aspectId]) knowledgeCache[f.aspectId] = [];
+                    knowledgeCache[f.aspectId].push(f);
                 });
-            })();
-            return initCachePromise;
-        }
+                isCacheInitialized = true;
+                initCachePromise = null;
+                resolve();
+            };
+            request.onerror = (e) => {
+                initCachePromise = null;
+                reject(e.target.error);
+            };
+        });
+    })();
+    return initCachePromise;
+}
 
-        export function resetCacheForTesting() {
-            isCacheInitialized = false;
-            knowledgeCache = {};
-            initCachePromise = null;
-        }
+export function resetCacheForTesting() {
+    isCacheInitialized = false;
+    knowledgeCache = {};
+    initCachePromise = null;
+}
 
-        export async function saveKnowledgeFile(aspectId, name, text) {
-            await initCache();
-            const db = await dbPromise;
+export async function saveKnowledgeFile(aspectId, name, text) {
+    if (!aspectId || !name) return;
+    await initCache();
+    const db = await getDB();
 
-            // Sync with DB and update cache ONLY on success
-            return new Promise((resolve, reject) => {
-                const tx = db.transaction('files', 'readwrite');
-                tx.objectStore('files').put({ aspectId, name, text });
-                tx.oncomplete = () => {
-                    if (!knowledgeCache[aspectId]) knowledgeCache[aspectId] = [];
-                    const existingIdx = knowledgeCache[aspectId].findIndex(f => f.name === name);
-                    if (existingIdx !== -1) {
-                        knowledgeCache[aspectId][existingIdx].text = text;
-                    } else {
-                        knowledgeCache[aspectId].push({ aspectId, name, text });
-                    }
-                    resolve();
-                };
-                tx.onerror = (e) => reject(e.target.error);
-            });
-        }
-
-        export async function getKnowledgeFilesRaw(aspectId) {
-            await initCache();
-            return knowledgeCache[aspectId] || [];
-        }
-
-        export async function getKnowledgeFilesText(aspectId) {
-            await initCache();
-            const files = knowledgeCache[aspectId] || [];
-            if (files.length === 0) {
-                return "";
+    // Sync with DB and update cache ONLY on success
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction('files', 'readwrite');
+        tx.objectStore('files').put({ aspectId, name, text });
+        tx.oncomplete = () => {
+            if (!knowledgeCache[aspectId]) knowledgeCache[aspectId] = [];
+            const existingIdx = knowledgeCache[aspectId].findIndex(f => f.name === name);
+            if (existingIdx !== -1) {
+                knowledgeCache[aspectId][existingIdx].text = text;
+            } else {
+                knowledgeCache[aspectId].push({ aspectId, name, text });
             }
-            return files.map(f => `\n\n--- Start of File: ${f.name} ---\n${f.text}\n--- End of File: ${f.name} ---`).join('\n');
+            resolve();
+        };
+        tx.onerror = (e) => reject(e.target.error);
+    });
+}
+
+/**
+ * Write multiple knowledge file entries in a single IndexedDB transaction.
+ *
+ * Batching eliminates the per-chunk transaction overhead that `saveKnowledgeFile`
+ * incurs when called in a loop — for large multi-page PDFs the difference is
+ * an order of magnitude. On quota failure the entire batch is rolled back
+ * atomically, so the store is never left in a half-written state (F-03).
+ *
+ * @param {Array<{aspectId: string, name: string, text: string}>} entries
+ */
+export async function saveKnowledgeFileBatch(entries) {
+    if (!entries || entries.length === 0) return;
+    await initCache();
+    const db = await getDB();
+
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction('files', 'readwrite');
+        const store = tx.objectStore('files');
+
+        tx.onerror = () => reject(tx.error);
+        tx.oncomplete = () => {
+            // Update the in-memory cache only after the transaction commits.
+            for (const { aspectId, name, text } of entries) {
+                if (!knowledgeCache[aspectId]) knowledgeCache[aspectId] = [];
+                const idx = knowledgeCache[aspectId].findIndex(f => f.name === name);
+                if (idx !== -1) {
+                    knowledgeCache[aspectId][idx].text = text;
+                } else {
+                    knowledgeCache[aspectId].push({ aspectId, name, text });
+                }
+            }
+            resolve();
+        };
+
+        for (const { aspectId, name, text } of entries) {
+            store.put({ aspectId, name, text });
+        }
+    });
+}
+
+export async function getKnowledgeFilesRaw(aspectId) {
+    if (!aspectId) return [];
+    await initCache();
+    return knowledgeCache[aspectId] || [];
+}
+
+export async function getKnowledgeFilesText(aspectId) {
+    if (!aspectId) return "";
+    await initCache();
+    const files = knowledgeCache[aspectId] || [];
+    if (files.length === 0) {
+        return "";
+    }
+    return files.map(f => `\n\n--- Start of File: ${f.name} ---\n${f.text}\n--- End of File: ${f.name} ---`).join('\n');
+}
+
+
+export async function uploadKnowledgeFiles(event) {
+    const files = event?.target?.files;
+    if (!files || files.length === 0) return;
+    const aspect = getCurrentAspect();
+    if (!aspect) return;
+
+    // Accumulate successfully processed entries so they can be written in a
+    // single batched IndexedDB transaction (F-03), eliminating per-chunk
+    // transaction serialisation overhead on large multi-page PDFs.
+    const batchEntries = [];
+    const errors = [];
+
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (!file || !file.name) continue;
+
+        if (Number.isFinite(file.size) && file.size > MAX_KNOWLEDGE_FILE_SIZE) {
+            window.showToast(`File "${file.name}" exceeds the maximum allowed size of 15MB.`, "error");
+            continue;
         }
 
-
-        export async function uploadKnowledgeFiles(event) {
-            const files = event.target.files;
-            if (!files || files.length === 0) return;
-            const aspect = getCurrentAspect();
-            if (!aspect) return;
-
-            let appendedText = "";
-            let processedCount = 0;
-            let uploadPromises = [];
-
-            for (let i = 0; i < files.length; i++) {
-                const file = files[i];
-                const ext = file.name.split('.').pop().toLowerCase();
-                let text = '';
+        const dotIdx = file.name.lastIndexOf('.');
+        const ext = dotIdx !== -1 ? file.name.slice(dotIdx + 1).toLowerCase() : '';
+        let text = '';
+        try {
+            if (ext === 'txt' || ext === 'md') {
+                text = await file.text();
+            } else if (ext === 'pdf') {
+                const pdfjsLib = await loadPdfjs();
+                const arrayBuffer = await file.arrayBuffer();
+                const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
                 try {
-                    if (ext === 'txt' || ext === 'md') {
-                        text = await file.text();
-                    } else if (ext === 'pdf') {
-                        const pdfjsLib = await loadPdfjs();
-                        const arrayBuffer = await file.arrayBuffer();
-                        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-                        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-                            const page = await pdf.getPage(pageNum);
-                            const textContent = await page.getTextContent();
-                            const pageText = textContent.items.map(item => item.str).join(' ');
-                            text += pageText + '\n';
-                        }
-                    } else if (ext === 'docx') {
-                        const mammoth = await loadMammoth();
-                        const arrayBuffer = await file.arrayBuffer();
-                        const result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
-                        text = result.value;
-                    } else {
-                        window.showToast(`Unsupported file type: ${ext}`, "error");
-                        continue;
+                    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                        const page = await pdf.getPage(pageNum);
+                        const textContent = await page.getTextContent();
+                        const pageText = textContent.items.map(item => item.str).join(' ');
+                        text += pageText + '\n';
                     }
-                    
-                    if (text) {
-                        uploadPromises.push(
-                            saveKnowledgeFile(aspect.id, file.name, text).then(() => {
-                                appendedText += `\nUploaded ${file.name} to internal storage.\n`;
-                                processedCount++;
-                            }).catch((e) => {
-                                console.error("Error saving file", file.name, e);
-                                window.showToast(`Failed to save ${file.name}: ${e.message}`, "error");
-                            })
-                        );
+                } finally {
+                    if (pdf && typeof pdf.destroy === 'function') {
+                        await pdf.destroy();
                     }
-                } catch (e) {
-                    console.error("Error processing file", file.name, e);
-                    window.showToast(`Failed to process ${file.name}: ${e.message}`, "error");
                 }
+            } else if (ext === 'docx') {
+                const mammoth = await loadMammoth();
+                const arrayBuffer = await file.arrayBuffer();
+                const result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
+                text = result.value || '';
+            } else {
+                window.showToast(`Unsupported file type: ${ext || '(none)'}`, "error");
+                continue;
             }
 
-            await Promise.all(uploadPromises);
-
-            if (processedCount > 0) {
-                // The files are attached to the Aspect and injected into context
-                // automatically. Previously this also appended a note into the
-                // Knowledge textarea on every upload, which slowly filled the
-                // user's own prompt with boilerplate; the file list in the
-                // editor shows what is attached instead.
-                window.showToast(`Attached ${processedCount} file(s) to this Aspect's knowledge.`);
-                if (typeof window.renderKnowledgeFileList === 'function') {
-                    window.renderKnowledgeFileList();
-                }
+            if (text && text.trim().length > 0) {
+                batchEntries.push({ aspectId: aspect.id, name: file.name, text });
+            } else {
+                window.showToast(`File "${file.name}" contains no readable text or is empty.`, "warning");
             }
-            event.target.value = '';
+        } catch (e) {
+            console.error("Error processing file", file.name, e);
+            errors.push({ name: file.name, message: e.message });
         }
+    }
+
+    // Persist all successfully extracted files in one transaction.
+    if (batchEntries.length > 0) {
+        try {
+            await saveKnowledgeFileBatch(batchEntries);
+        } catch (e) {
+            console.error("Error saving knowledge file batch", e);
+            for (const entry of batchEntries) {
+                errors.push({ name: entry.name, message: e.message });
+            }
+            batchEntries.length = 0; // nothing was committed
+        }
+    }
+
+    // Report per-file save errors that were caught above.
+    for (const { name, message } of errors) {
+        window.showToast(`Failed to save ${name}: ${message}`, "error");
+    }
+
+    if (batchEntries.length > 0) {
+        window.showToast(`Attached ${batchEntries.length} file(s) to this Aspect's knowledge.`);
+        if (typeof window.renderKnowledgeFileList === 'function') {
+            window.renderKnowledgeFileList();
+        }
+    }
+    if (event.target) {
+        event.target.value = '';
+    }
+}
 
 export async function deleteKnowledgeFile(aspectId, name) {
+    if (!aspectId || !name) return;
     await initCache();
-    const db = await dbPromise;
+    const db = await getDB();
     return new Promise((resolve, reject) => {
         const tx = db.transaction('files', 'readwrite');
         tx.objectStore('files').delete([aspectId, name]);
@@ -211,7 +321,8 @@ export async function deleteKnowledgeFile(aspectId, name) {
 }
 
 export async function deleteAspectData(aspectId) {
-    const db = await dbPromise;
+    if (!aspectId) return;
+    const db = await getDB();
     return new Promise((resolve, reject) => {
         const tx = db.transaction(['files', 'memory'], 'readwrite');
 
@@ -223,12 +334,15 @@ export async function deleteAspectData(aspectId) {
         const filesStore = tx.objectStore('files');
         const fileIndex = filesStore.getAll();
         fileIndex.onsuccess = () => {
-            fileIndex.result.forEach(f => {
-                if (f.aspectId === aspectId) {
-                    filesStore.delete([aspectId, f.name]);
-                }
-            });
+            if (Array.isArray(fileIndex.result)) {
+                fileIndex.result.forEach(f => {
+                    if (f.aspectId === aspectId) {
+                        filesStore.delete([aspectId, f.name]);
+                    }
+                });
+            }
         };
+        fileIndex.onerror = (e) => reject(e.target.error);
 
         tx.oncomplete = () => {
             if (knowledgeCache && knowledgeCache[aspectId]) {

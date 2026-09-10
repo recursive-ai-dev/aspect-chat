@@ -497,18 +497,32 @@ export async function testFallbackConnection() {
  * ------------------------------------------------------------------ */
 
 window.addEventListener('click', function (event) {
+    if (!event.target) return;
+    const target = event.target;
     const createModal = el('create-aspect-modal');
-    if (createModal && event.target === createModal) {
+    if (createModal && target === createModal) {
         cancelCreateAspect();
+        return;
     }
     const settingsModal = el('settings-modal');
-    if (settingsModal && event.target === settingsModal) {
+    if (settingsModal && target === settingsModal) {
         settingsModal.classList.add('hidden');
+        return;
+    }
+    if (target.id === 'system-tools-modal' || target.id === 'workflow-modal') {
+        target.classList.add('hidden');
     }
 });
 
 window.addEventListener('keydown', function (event) {
     if (event.key !== 'Escape') return;
+
+    // Dismiss floating tools dropdown first if open
+    const dropdown = el('tools-dropdown');
+    if (dropdown && dropdown.classList.contains('show')) {
+        dropdown.classList.remove('show');
+        return;
+    }
 
     // Close the topmost open modal only, so Escape inside the tool editor does
     // not also dismiss whatever is behind it.

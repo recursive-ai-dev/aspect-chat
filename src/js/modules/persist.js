@@ -365,25 +365,33 @@ export function serializeLibrary(aspects) {
  *
  * A library JSON file is arbitrary user-supplied data that the app actively
  * encourages sharing. `trustedHash` records "the user has read this exact
- * code"; `allowNetwork` records "the user has let this tool reach the network";
- * `toolsReviewed` is the coarse editor hint. None of those decisions may be
- * asserted by the file — they are made on this machine, in the editor. We drop
- * them, keep only `{ name, code, state }`, and mark the aspect unreviewed
- * whenever it carries tools, exactly as the `.aspect` import path does
- * (`zip.js` loadAspectFile → `toolsReviewed: tools.length === 0`).
+ * code"; `allowNetwork` / `allowedOrigins` record "the user has let this tool
+ * reach the network at these origins"; `toolsReviewed` is the coarse editor
+ * hint. None of those decisions may be asserted by the file — they are made on
+ * this machine, in the editor. We drop them, keep only `{ name, code, state }`,
+ * and mark the aspect unreviewed whenever it carries tools, exactly as the
+ * `.aspect` import path does (`zip.js` loadAspectFile →
+ * `toolsReviewed: tools.length === 0`).
+ *
+ * Exported so that backup.js (importAllAspects) can apply the same sanitization
+ * to whole-library JSON imports, closing F-01 / F-02.
  */
-function sanitizeImportedTools(aspect) {
-    if (!aspect || typeof aspect !== 'object') return aspect;
-    const tools = Array.isArray(aspect.tools) ? aspect.tools : [];
-    aspect.tools = tools
+export function sanitizeImportedAspect(rawAspect) {
+    if (!rawAspect || typeof rawAspect !== 'object') return rawAspect;
+    const hasTools = Array.isArray(rawAspect.tools) && rawAspect.tools.length > 0;
+    const tools = (rawAspect.tools || [])
         .filter(t => t && typeof t === 'object')
         .map(t => ({
-            name: t.name,
-            code: t.code,
+            name: String(t.name || 'UnnamedTool.js'),
+            code: String(t.code || ''),
             state: (t.state && typeof t.state === 'object') ? t.state : {}
+            // trustedHash, allowNetwork, allowedOrigins deliberately omitted
         }));
-    aspect.toolsReviewed = aspect.tools.length === 0;
-    return aspect;
+    return {
+        ...rawAspect,
+        tools,
+        toolsReviewed: !hasTools
+    };
 }
 
 /** Parse a library file, returning normalized aspects or throwing. */
@@ -395,7 +403,7 @@ export function parseLibrary(text) {
     }
     return list
         .filter(a => a && typeof a === 'object')
-        .map(a => normalizeConversations(sanitizeImportedTools(a)));
+        .map(a => normalizeConversations(sanitizeImportedAspect(a)));
 }
 
 /** Test-only: clear queued work between cases. */

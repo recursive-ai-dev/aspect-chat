@@ -33,7 +33,7 @@ export function readStoredTheme() {
 }
 
 /** Put the right classes on <body> for `id`. Safe to call before/after paint. */
-export function applyTheme(id) {
+export function applyTheme(id, { persist = false } = {}) {
     const body = typeof document !== 'undefined' && document.body;
     if (!body) return;
     const theme = getTheme(id);
@@ -41,6 +41,12 @@ export function applyTheme(id) {
     if (theme.dark) body.classList.add('dark-theme');
     if (theme.cls) body.classList.add(theme.cls);
     body.dataset.theme = theme.id;
+    if (persist && typeof localStorage !== 'undefined') {
+        try {
+            localStorage.setItem('theme', theme.id);
+            localStorage.setItem('darkMode', String(theme.dark));
+        } catch { /* storage full or private mode */ }
+    }
 }
 
 /** Fill a <select> with the theme catalogue. */

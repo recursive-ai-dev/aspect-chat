@@ -446,4 +446,39 @@ describe('Settings Module', () => {
             expect(modelSelect.value).toBe('model1');
         });
     });
+
+    describe('modal overlay clicks and Escape dismissals', () => {
+        it('dismisses system-tools-modal and workflow-modal when backdrop is clicked', () => {
+            const systemModal = document.createElement('div');
+            systemModal.id = 'system-tools-modal';
+            systemModal.className = 'modal-overlay';
+            document.body.appendChild(systemModal);
+
+            const workflowModal = document.createElement('div');
+            workflowModal.id = 'workflow-modal';
+            workflowModal.className = 'modal-overlay';
+            document.body.appendChild(workflowModal);
+
+            systemModal.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            expect(systemModal.classList.contains('hidden')).toBe(true);
+
+            workflowModal.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            expect(workflowModal.classList.contains('hidden')).toBe(true);
+
+            systemModal.remove();
+            workflowModal.remove();
+        });
+
+        it('closes tools-dropdown on Escape key', () => {
+            const dropdown = document.createElement('div');
+            dropdown.id = 'tools-dropdown';
+            dropdown.className = 'show';
+            document.body.appendChild(dropdown);
+
+            window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            expect(dropdown.classList.contains('show')).toBe(false);
+
+            dropdown.remove();
+        });
+    });
 });

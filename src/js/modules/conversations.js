@@ -150,6 +150,7 @@ export function renameConversation(aspect, conversationId, title) {
     if (!conv) return false;
     const clean = (title || '').trim();
     conv.title = clean || deriveTitle(conv.messages);
+    conv.titleLocked = Boolean(clean);
     conv.updatedAt = Date.now();
     return true;
 }
@@ -168,9 +169,9 @@ export function touchActiveConversation(aspect) {
 }
 
 /** Mark a title as user-chosen so auto-titling stops overwriting it. */
-export function lockConversationTitle(aspect, conversationId) {
+export function lockConversationTitle(aspect, conversationId, locked = true) {
     const conv = aspect.conversations?.find(c => c.id === conversationId);
-    if (conv) conv.titleLocked = true;
+    if (conv) conv.titleLocked = Boolean(locked);
 }
 
 /** Conversations newest-activity-first, for list rendering. */
