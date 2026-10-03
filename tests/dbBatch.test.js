@@ -7,6 +7,7 @@
  */
 
 import 'fake-indexeddb/auto';
+import { getDB, requestToPromise } from '../src/js/modules/idb.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
     saveKnowledgeFileBatch,
@@ -86,6 +87,15 @@ describe('saveKnowledgeFileBatch', () => {
         resetCacheForTesting();
         const files = await getKnowledgeFilesRaw(aspectId);
         expect(files.length).toBe(50);
+    });
+
+    it('uses one read-write transaction for 50 chunks', async () => {
+        await getKnowledgeFilesRaw('transaction-count');
+        const db = await getDB();
+        const spy = vi.spyOn(db, 'transaction');
+        await saveKnowledgeFileBatch(Array.from({ length: 50 }, (_, i) => ({ aspectId: 'transaction-count', name: `chunk${i}`, text: 'page' })));
+        expect(spy.mock.calls.filter(call => call[1] === 'readwrite')).toHaveLength(1);
+        spy.mockRestore();
     });
 
     it('is a no-op for an empty array', async () => {
@@ -179,5 +189,11 @@ describe('saveKnowledgeFileBatch atomic failure handling', () => {
         // the cache must not have been updated.
         const files = await getKnowledgeFilesRaw(aspectId);
         expect(files.length).toBe(0);
+        // Read the actual store: an unchanged cache can hide a partial commit.
+        const db = await getDB();
+        const persisted = await requestToPromise(db.transaction('files').objectStore('files').getAll());
+        expect(persisted.filter(file => file.aspectId === aspectId)).toEqual([]);
+        resetCacheForTesting();
+        expect(await getKnowledgeFilesRaw(aspectId)).toEqual([]);
     });
 });

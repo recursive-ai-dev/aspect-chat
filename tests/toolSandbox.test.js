@@ -18,6 +18,7 @@ function makeFakeFrame(behaviour) {
             parentNode: { removeChild: vi.fn() },
             contentWindow: {
                 postMessage: (msg) => {
+                    if (msg.type === 'teardown') parentReceive({ channel, type: 'teardown-complete' });
                     Promise.resolve().then(() => behaviour(msg, parentReceive, channel));
                 }
             }

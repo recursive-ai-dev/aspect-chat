@@ -379,7 +379,7 @@ export function serializeLibrary(aspects) {
 export function sanitizeImportedAspect(rawAspect) {
     if (!rawAspect || typeof rawAspect !== 'object') return rawAspect;
     const hasTools = Array.isArray(rawAspect.tools) && rawAspect.tools.length > 0;
-    const tools = (rawAspect.tools || [])
+    const tools = (Array.isArray(rawAspect.tools) ? rawAspect.tools : [])
         .filter(t => t && typeof t === 'object')
         .map(t => ({
             name: String(t.name || 'UnnamedTool.js'),

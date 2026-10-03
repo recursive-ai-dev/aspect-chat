@@ -8,7 +8,7 @@
  */
 
 export const DB_NAME = 'AspectKnowledgeDB';
-export const DB_VERSION = 4;
+export const DB_VERSION = 5;
 
 export const STORE_FILES = 'files';
 export const STORE_MEMORY = 'memory';
@@ -27,6 +27,10 @@ function openDatabase() {
 
         request.onupgradeneeded = (e) => {
             const db = e.target.result;
+            if (!db.objectStoreNames.contains('vectors')) {
+                const vectors = db.createObjectStore('vectors', { keyPath: ['aspectId', 'name', 'chunkIndex'] });
+                vectors.createIndex('aspectId', 'aspectId');
+            }
             if (!db.objectStoreNames.contains(STORE_FILES)) {
                 db.createObjectStore(STORE_FILES, { keyPath: ['aspectId', 'name'] });
             }

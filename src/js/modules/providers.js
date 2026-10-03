@@ -206,6 +206,7 @@ export function requiresApiKey(url) {
 /** Normalise a base URL into a full chat-completions endpoint. */
 export function getApiEndpoint(apiUrl) {
     let endpoint = (apiUrl || '').trim();
+    if (/\/api\/chat\/?$/.test(endpoint)) return endpoint.replace(/\/$/, '');
     if (!endpoint.endsWith('/chat/completions') && !endpoint.endsWith('/chat/completions/')) {
         endpoint = endpoint.replace(/\/+$/, '') + '/chat/completions';
     }
@@ -368,8 +369,9 @@ export function supportsNativeTools(url) {
     // Local servers: Ollama (11434) and LM Studio (1234) both support tools.
     // Detect them via isLocalEndpoint + well-known port patterns.
     if (isLocalEndpoint(trimmed)) {
-        if (trimmed.includes(':11434')) return true; // Ollama
-        if (trimmed.includes(':1234'))  return true; // LM Studio
+        const parsed = new URL(trimmed);
+        if (['11434', '1234', '8000'].includes(parsed.port)) return true;
+        if (/\/api\/chat\/?$/.test(parsed.pathname)) return true;
     }
 
     return false;

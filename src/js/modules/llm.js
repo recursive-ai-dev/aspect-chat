@@ -15,7 +15,8 @@ import {
     requiresApiKey,
     describeConnectionError,
     describeHttpError,
-    mixedContentWarning
+    mixedContentWarning,
+    supportsNativeTools
 } from './providers.js';
 import { streamWebLLMChat } from './webllm.js';
 
@@ -95,8 +96,9 @@ export function extractNativeToolCalls(source) {
         return source
             .filter(tc => tc?.function?.name)
             .map(tc => ({
+                ...(tc.id ? { id: tc.id } : {}),
                 name: tc.function.name,
-                args: tc.function.arguments ?? '{}'
+                args: typeof tc.function.arguments === 'string' ? tc.function.arguments : JSON.stringify(tc.function.arguments ?? {})
             }));
     }
 
@@ -107,7 +109,7 @@ export function extractNativeToolCalls(source) {
         const sorted = [...source.entries()].sort((a, b) => a[0] - b[0]);
         for (const [, entry] of sorted) {
             if (!entry.name) continue;
-            out.push({ name: entry.name, args: entry.argsChunks.join('') });
+            out.push({ ...(entry.id ? { id: entry.id } : {}), name: entry.name, args: entry.argsChunks.join('') });
         }
         return out;
     }
@@ -131,6 +133,7 @@ export async function readSSEStream(reader, onDelta, onToolCall) {
     let pending = '';
     // Accumulator for streaming tool_calls fragments (index → entry).
     const toolCallsMap = new Map();
+    let dispatched = false;
 
     const consumeLine = (rawLine) => {
         const line = rawLine.replace(/\r$/, '').trim();
@@ -162,6 +165,7 @@ export async function readSSEStream(reader, onDelta, onToolCall) {
             if (onToolCall && toolCallsMap.size > 0) {
                 const calls = extractNativeToolCalls(toolCallsMap);
                 if (calls.length > 0) onToolCall(calls);
+                dispatched = true;
             }
             return;
         }
@@ -188,6 +192,7 @@ export async function readSSEStream(reader, onDelta, onToolCall) {
     // trailing line if it arrived without a newline.
     pending += decoder.decode();
     if (pending) consumeLine(pending);
+    if (!dispatched && toolCallsMap.size && onToolCall) onToolCall(extractNativeToolCalls(toolCallsMap));
 
     return full;
 }
@@ -296,6 +301,7 @@ export async function streamChat({ target, messages, params = {}, signal, onDelt
         });
     }
 
+    const ollama = /\/api\/chat\/?$/.test(target.url);
     const body = { messages, stream: true };
     if (target.model) body.model = target.model;
     if (typeof params.temperature === 'number') body.temperature = params.temperature;
@@ -303,9 +309,20 @@ export async function streamChat({ target, messages, params = {}, signal, onDelt
     if (typeof params.topP === 'number') body.top_p = params.topP;
 
     // Native function calling: attach the tools schema when the caller provides one.
-    if (Array.isArray(params.tools) && params.tools.length > 0) {
+    if (Array.isArray(params.tools) && params.tools.length > 0 && params.toolCallingMode !== 'markers' &&
+        (params.toolCallingMode === 'native' || supportsNativeTools(target.url))) {
         body.tools = params.tools;
-        body.tool_choice = 'auto';
+        if (!ollama) body.tool_choice = 'auto';
+    }
+    if (ollama) {
+        body.options = {};
+        if (typeof params.temperature === 'number') body.options.temperature = params.temperature;
+        if (typeof params.topP === 'number') body.options.top_p = params.topP;
+        if (params.maxTokens > 0) body.options.num_predict = params.maxTokens;
+        if (params.contextTokens > 0) body.options.num_ctx = params.contextTokens;
+        delete body.temperature;
+        delete body.top_p;
+        delete body.max_tokens;
     }
 
     let response;
@@ -328,7 +345,40 @@ export async function streamChat({ target, messages, params = {}, signal, onDelt
         throw new Error('The server returned no response body. It may not support streaming.');
     }
 
-    return readSSEStream(response.body.getReader(), onDelta, onToolCall);
+    const reader = response.body.getReader();
+    try {
+        return await (ollama ? readOllamaStream(reader, onDelta, onToolCall) : readSSEStream(reader, onDelta, onToolCall));
+    } finally {
+        try { await reader.cancel(); } catch { /* aborted stream */ }
+        reader.releaseLock();
+    }
+}
+
+export async function readOllamaStream(reader, onDelta, onToolCall) {
+    const decoder = new TextDecoder();
+    let pending = '', full = '';
+    const calls = [];
+    const consume = line => {
+        if (!line.trim()) return;
+        const data = JSON.parse(line);
+        if (data.error) throw new Error(String(data.error));
+        const delta = data.message?.content || '';
+        full += delta;
+        if (delta && onDelta) onDelta(delta, full);
+        calls.push(...extractNativeToolCalls(data.message?.tool_calls));
+    };
+    for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        pending += decoder.decode(value, { stream: true });
+        const lines = pending.split('\n');
+        pending = lines.pop();
+        lines.forEach(consume);
+    }
+    pending += decoder.decode();
+    consume(pending);
+    if (calls.length && onToolCall) onToolCall(calls);
+    return full;
 }
 
 /**
@@ -352,11 +402,20 @@ export async function completeChat({ target, messages, params = {}, signal }) {
         });
     }
 
+    const ollama = /\/api\/chat\/?$/.test(target.url);
     const body = { messages, stream: false };
     if (target.model) body.model = target.model;
     if (typeof params.temperature === 'number') body.temperature = params.temperature;
     if (typeof params.maxTokens === 'number' && params.maxTokens > 0) body.max_tokens = params.maxTokens;
     if (typeof params.topP === 'number') body.top_p = params.topP;
+    if (ollama) {
+        body.options = { temperature: params.temperature, top_p: params.topP };
+        if (params.maxTokens > 0) body.options.num_predict = params.maxTokens;
+        if (params.contextTokens > 0) body.options.num_ctx = params.contextTokens;
+        delete body.temperature;
+        delete body.top_p;
+        delete body.max_tokens;
+    }
 
     let response;
     try {
@@ -376,7 +435,7 @@ export async function completeChat({ target, messages, params = {}, signal }) {
     }
 
     const data = await response.json().catch(() => ({}));
-    const content = extractMessageContent(data?.choices?.[0]?.message);
+    const content = extractMessageContent(ollama ? data.message : data?.choices?.[0]?.message);
     if (content == null) {
         throw new Error('Empty response from model.');
     }

@@ -1,3 +1,4 @@
+import { sandboxBootstrap } from './sandboxBootstrap.js';
 /**
  * Run one Aspect tool's code in a locked-down iframe.
  *
@@ -22,104 +23,6 @@
 const CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'none'; connect-src 'none'";
 
 /** Bootstrap that runs inside the sandbox. `__CHANNEL__` is substituted per run. */
-function sandboxBootstrap() {
-    const channel = '__CHANNEL__';
-    const send = (msg) => parent.postMessage(Object.assign({ channel }, msg), '*');
-
-    // Tool code and the system tools call self.postMessage(...) expecting it to
-    // reach the host (Worker semantics). Route it to the parent instead.
-    self.postMessage = send;
-
-    // Network: hand every request to the parent broker, which enforces the
-    // per-tool permission. Everything else that can open a socket is removed.
-    const netWaiters = new Map();
-    let netSeq = 0;
-    // Settle every outstanding brokered fetch when the run ends, so a tool that
-    // started a request it never awaited does not leave a dangling promise in a
-    // frame that is about to be discarded.
-    const rejectPendingFetches = (reason) => {
-        netWaiters.forEach((w) => { try { w.reject(new TypeError(reason)); } catch (_e) { /* already settled */ } });
-        netWaiters.clear();
-    };
-    self.fetch = (input, init) => {
-        init = init || {};
-        const url = typeof input === 'string' ? input : (input && input.url);
-        const method = String(
-            init.method || (input && typeof input === 'object' && input.method) || 'GET'
-        ).toUpperCase();
-        let headers = {};
-        try {
-            if (init.headers && typeof init.headers === 'object') {
-                headers = typeof init.headers.entries === 'function'
-                    ? Object.fromEntries(init.headers.entries())
-                    : Object.assign({}, init.headers);
-            }
-        } catch (_e) { headers = {}; }
-        const body = typeof init.body === 'string' ? init.body : undefined;
-        const id = ++netSeq;
-        return new Promise((resolve, reject) => {
-            netWaiters.set(id, { resolve, reject });
-            send({ type: 'net-request', id, url, method, headers, body });
-        });
-    };
-    const blocked = (name) => function () {
-        throw new Error(name + ' is disabled inside tools. Use fetch().');
-    };
-    self.XMLHttpRequest = blocked('XMLHttpRequest');
-    self.WebSocket = blocked('WebSocket');
-    self.EventSource = blocked('EventSource');
-    try { if (self.navigator) self.navigator.sendBeacon = () => false; } catch (_e) { /* frozen navigator */ }
-    try { delete self.indexedDB; } catch (_e) { /* getter-only */ }
-
-    self.addEventListener('message', async (e) => {
-        const d = e && e.data;
-        if (!d || d.channel !== channel) return;
-
-        if (d.type === 'teardown') {
-            rejectPendingFetches('Tool sandbox was torn down before this request completed.');
-            return;
-        }
-
-        if (d.type === 'net-result') {
-            const w = netWaiters.get(d.id);
-            if (!w) return;
-            netWaiters.delete(d.id);
-            if (d.ok) {
-                w.resolve(new Response(d.body, {
-                    status: d.status || 200,
-                    statusText: d.statusText || '',
-                    headers: d.headers || {}
-                }));
-            } else {
-                w.reject(new TypeError(d.error || 'Network request failed'));
-            }
-            return;
-        }
-
-        // memoryWriteComplete / summonComplete are consumed by the system-tool
-        // listeners themselves; nothing to do here.
-        if (d.type !== 'init') return;
-
-        self.aspectMemory = d.memory || {};
-        try {
-            // The tool code ran as its own <script> in this document (the CSP
-            // forbids eval), defining executeTool at global scope.
-            let fn;
-            try { fn = executeTool; } catch (_e) { fn = undefined; }
-            if (typeof fn !== 'function') {
-                throw new Error("Function executeTool(args, state) is not defined in this script.");
-            }
-            const result = await fn(d.args, d.state);
-            rejectPendingFetches('Tool run finished before this request completed.');
-            send({ type: 'done', ok: true, result, state: d.state });
-        } catch (err) {
-            rejectPendingFetches('Tool run failed before this request completed.');
-            send({ type: 'done', ok: false, error: (err && err.message) || String(err) });
-        }
-    });
-
-    send({ type: 'ready' });
-}
 
 function buildSrcdoc(channel, toolCode) {
     const boot = `(${sandboxBootstrap.toString().replace('__CHANNEL__', channel)})();`;
@@ -143,7 +46,7 @@ const randomChannel = () => {
         c.getRandomValues(b);
         return 'ch_' + Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
     }
-    return 'ch_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    throw new Error('Web Crypto is required to run tools securely.');
 };
 
 /**
@@ -159,29 +62,48 @@ const randomChannel = () => {
  * @param {(html:string)=>HTMLIFrameElement} [opts._createFrame]  test seam
  * @returns {Promise<{result:*, state:object}>}
  */
-export function runSandboxedTool(opts) {
+function runToolInFrame(opts) {
     const {
         code, args, state, memory, timeoutMs = 30000,
-        signal, onPrivileged, onNetwork, _createFrame
+        signal, onPrivileged, onNetwork, _createFrame, _channel, _releaseFrame
     } = opts;
 
-    const channel = randomChannel();
+    const channel = _channel || randomChannel();
 
     return new Promise((resolve, reject) => {
         let settled = false;
         let iframe = null;
         let timer = null;
         let onAbort = null;
+        const networkController = new AbortController();
+        const netWaiters = new Map();
 
         const cleanup = () => {
+            networkController.abort();
+            for (const waiter of netWaiters.values()) waiter.reject(new Error('Tool execution aborted or timed out during pending fetch'));
+            netWaiters.clear();
             if (timer) clearTimeout(timer);
             window.removeEventListener('message', onMessage);
             if (onAbort && signal) signal.removeEventListener('abort', onAbort);
             if (iframe) {
+                const frame = iframe;
+                const dispose = () => {
+                    clearTimeout(disposalTimer);
+                    window.removeEventListener('message', acknowledge);
+                    if (_releaseFrame) _releaseFrame();
+                    else if (frame.parentNode) frame.parentNode.removeChild(frame);
+                };
+                const acknowledge = event => {
+                    if (event.data?.channel === channel && event.data.type === 'teardown-complete' &&
+                        (!event.source || event.source === frame.contentWindow)) dispose();
+                };
+                const disposalTimer = setTimeout(dispose, 50);
+                window.addEventListener('message', acknowledge);
                 // Give the bootstrap a chance to reject any in-flight brokered
                 // fetch before its context is destroyed.
                 try { post({ type: 'teardown' }); } catch (_e) { /* frame already gone */ }
-                if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+                // Acknowledgement lets the frame drain its promises before
+                // destruction. The deadline also handles an infinite JS loop.
             }
             iframe = null;
         };
@@ -208,10 +130,10 @@ export function runSandboxedTool(opts) {
 
         function onMessage(e) {
             const d = e && e.data;
-            if (!d || d.channel !== channel) return;
+            if (settled || !d || d.channel !== channel || (e.source && e.source !== iframe?.contentWindow)) return;
 
             if (d.type === 'ready') {
-                post({ type: 'init', args, state, memory: memory || {} });
+                post({ type: 'init', args, state, memory: memory || {}, ...(_releaseFrame ? { code } : {}) });
                 return;
             }
             if (d.type === 'done') {
@@ -229,12 +151,21 @@ export function runSandboxedTool(opts) {
             }
 
             if (d.type === 'net-request') {
-                Promise.resolve(onNetwork ? onNetwork(d) : { ok: false, error: 'Network disabled.' })
+                if (netWaiters.has(d.id)) {
+                    finish(reject, new Error('Duplicate sandbox network request identifier.'));
+                    return;
+                }
+                const pending = new Promise((resolve, reject) => {
+                    netWaiters.set(d.id, { reject });
+                    Promise.resolve().then(() => onNetwork ? onNetwork({ ...d, signal: networkController.signal }) : { ok: false, error: 'Network disabled.' }).then(resolve, reject);
+                });
+                pending
                     .then((res) => post(Object.assign({ type: 'net-result', id: d.id }, res)))
                     .catch((err) => post({
                         type: 'net-result', id: d.id, ok: false,
                         error: (err && err.message) || String(err)
-                    }));
+                    }))
+                    .finally(() => netWaiters.delete(d.id));
                 return;
             }
             // writeMemory / summonAspect: the parent does the privileged work and
@@ -265,6 +196,84 @@ export function runSandboxedTool(opts) {
         } catch (err) {
             finish(reject, err instanceof Error ? err : new Error(String(err)));
         }
+    });
+}
+
+// Keep three mounted containers. Each lease gets a fresh opaque-origin document:
+// globals, listeners, timers, and tool scripts never survive into the next run.
+const pool = [];
+const queue = [];
+function warmSlot(slot) {
+    slot.channel = randomChannel();
+    slot.ready = false;
+    slot.frame.removeAttribute('srcdoc');
+    slot.frame.src = new URL('tool-sandbox.html', document.baseURI).href + '#' + slot.channel;
+}
+function pumpPool() {
+    for (const slot of pool) {
+        if (slot.busy || !slot.ready || !queue.length) continue;
+        const task = queue.shift();
+        task.detach();
+        slot.busy = true;
+        task.resolve(slot);
+    }
+}
+function acquireFrame(signal, timeoutMs) {
+    if (!pool.length) {
+        window.addEventListener('message', event => {
+            const slot = pool.find(item => event.source === item.frame.contentWindow && event.data?.channel === item.channel);
+            if (slot && event.data.type === 'ready') { slot.ready = true; pumpPool(); }
+        });
+        for (let i = 0; i < 3; i++) {
+            const slot = { frame: defaultCreateFrame(''), busy: false };
+            pool.push(slot);
+            warmSlot(slot);
+        }
+    }
+    return new Promise((resolve, reject) => {
+        let timer;
+        const cancel = () => {
+            const index = queue.indexOf(task);
+            if (index !== -1) queue.splice(index, 1);
+            task.detach();
+            reject(new Error(signal?.aborted ? 'Tool execution aborted.' : 'Tool sandbox queue timed out.'));
+        };
+        const task = { resolve, detach: () => { clearTimeout(timer); signal?.removeEventListener('abort', cancel); } };
+        queue.push(task);
+        timer = setTimeout(cancel, timeoutMs);
+        signal?.addEventListener('abort', cancel, { once: true });
+        if (signal?.aborted) cancel();
+        else pumpPool();
+    });
+}
+export function runSandboxedTool(opts) {
+    if (opts._createFrame) return runToolInFrame(opts);
+    return runPooledTool(opts);
+}
+async function runPooledTool(opts) {
+    const timeoutMs = opts.timeoutMs ?? 30000;
+    const started = Date.now();
+    const slot = await acquireFrame(opts.signal, timeoutMs);
+    let released = false;
+    const release = () => {
+        if (released) return;
+        released = true;
+        // Teardown is delivered before replacing the document. A fresh page
+        // also destroys any timer or listener the tool left behind.
+        setTimeout(() => {
+            warmSlot(slot);
+            slot.busy = false;
+        }, 0);
+    };
+    if (opts.signal?.aborted) { release(); throw new Error('Tool execution aborted.'); }
+    return runToolInFrame({ ...opts, timeoutMs: Math.max(1, timeoutMs - (Date.now() - started)),
+            _channel: slot.channel, _releaseFrame: release,
+            _createFrame: () => {
+                queueMicrotask(() => window.dispatchEvent(new MessageEvent('message', {
+                    source: slot.frame.contentWindow, data: { channel: slot.channel, type: 'ready' }
+                })));
+                return slot.frame;
+            }
     });
 }
 

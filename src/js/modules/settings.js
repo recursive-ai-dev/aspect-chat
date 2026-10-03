@@ -96,6 +96,11 @@ export function openSettings() {
     if (el('remember-key-toggle')) el('remember-key-toggle').checked = state.settings.rememberKey !== false;
     if (el('tool-timeout-input')) el('tool-timeout-input').value = Math.round((state.settings.toolTimeoutMs || 30000) / 1000);
     if (el('max-knowledge-chars-input')) el('max-knowledge-chars-input').value = state.settings.maxKnowledgeChars || 100000;
+    if (el('context-tokens-input')) el('context-tokens-input').value = state.settings.contextTokens || 8192;
+    if (el('tool-calling-mode')) el('tool-calling-mode').value = state.settings.toolCallingMode || 'auto';
+    if (el('semantic-retrieval-toggle')) el('semantic-retrieval-toggle').checked = state.settings.semanticRetrieval !== false;
+    if (el('embedding-downloads-toggle')) el('embedding-downloads-toggle').checked = !!state.settings.embeddingDownloads;
+    if (el('retrieval-top-k-input')) el('retrieval-top-k-input').value = state.settings.retrievalTopK || 4;
 
     const fallbackSelect = el('fallback-provider-select');
     if (fallbackSelect) fallbackSelect.value = state.settings.fallbackProvider || '';
@@ -125,6 +130,12 @@ export function saveSettings() {
     s.model = el('api-model-input') ? el('api-model-input').value.trim() : s.model;
     s.maxContext = parseInt(el('api-max-context-input')?.value, 10) || 20;
     s.rememberKey = el('remember-key-toggle') ? el('remember-key-toggle').checked : true;
+    s.contextTokens = Math.max(512, parseInt(el('context-tokens-input')?.value, 10) || s.contextTokens || 8192);
+    s.toolCallingMode = el('tool-calling-mode')?.value || s.toolCallingMode || 'auto';
+    s.semanticRetrieval = el('semantic-retrieval-toggle')?.checked ?? s.semanticRetrieval;
+    s.embeddingDownloads = el('embedding-downloads-toggle')?.checked ?? s.embeddingDownloads;
+    s.retrievalTopK = Math.max(1, Math.min(10, parseInt(el('retrieval-top-k-input')?.value, 10) || s.retrievalTopK || 4));
+    for (const key of ['contextTokens', 'toolCallingMode', 'semanticRetrieval', 'embeddingDownloads', 'retrievalTopK']) safeSet(key, String(s[key]));
 
     const timeoutSeconds = parseInt(el('tool-timeout-input')?.value, 10);
     s.toolTimeoutMs = Number.isFinite(timeoutSeconds) && timeoutSeconds > 0

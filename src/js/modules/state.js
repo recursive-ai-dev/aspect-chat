@@ -35,6 +35,11 @@ export let state = {
         model: (typeof localStorage !== 'undefined' && localStorage.getItem('model')) || '',
         provider: (typeof localStorage !== 'undefined' && localStorage.getItem('provider')) || 'custom',
         maxContext: readNumber('maxContext', 20),
+        contextTokens: readNumber('contextTokens', 8192),
+        toolCallingMode: (typeof localStorage !== 'undefined' && localStorage.getItem('toolCallingMode')) || 'auto',
+        semanticRetrieval: readBool('semanticRetrieval', true),
+        embeddingDownloads: readBool('embeddingDownloads', false),
+        retrievalTopK: readNumber('retrievalTopK', 4),
         rememberKey: readBool('rememberKey', true),
 
         // Optional secondary provider, used when the primary one fails.

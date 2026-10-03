@@ -1,4 +1,24 @@
 import { defineConfig } from 'vite';
+import { sandboxBootstrap } from './src/js/modules/sandboxBootstrap.js';
+
+function sandboxPagePlugin() {
+    // A real document gets its own CSP. srcdoc inherits the app's production
+    // policy, which intentionally forbids inline tool code.
+    const boot = sandboxBootstrap.toString().replace(/(['"])__CHANNEL__\1/, 'location.hash.slice(1)');
+    const html = `<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; connect-src 'none'; style-src 'none'"><body><script>(${boot})();</script>`;
+    return {
+        name: 'tool-sandbox-page',
+        configureServer(server) {
+            server.middlewares.use((req, res, next) => {
+                if (req.url?.split('?')[0]?.endsWith('/tool-sandbox.html')) {
+                    res.setHeader('Content-Type', 'text/html');
+                    res.end(html);
+                } else next();
+            });
+        },
+        generateBundle() { this.emitFile({ type: 'asset', fileName: 'tool-sandbox.html', source: html }); }
+    };
+}
 
 /**
  * Swap the baseline Content-Security-Policy meta in index.html for the strict
@@ -48,7 +68,7 @@ function cspPlugin() {
 
 export default defineConfig({
     base: './',
-    plugins: [cspPlugin()],
+    plugins: [cspPlugin(), sandboxPagePlugin()],
     build: {
         // Set just above the `webllm` chunk. @mlc-ai/web-llm is ~6 MB as one
         // indivisible library; it is already isolated into its own lazily-
@@ -62,6 +82,7 @@ export default defineConfig({
                 manualChunks(id) {
                     if (!id.includes('node_modules')) return;
                     if (id.includes('@mlc-ai/web-llm')) return 'webllm';
+                    if (id.includes('@huggingface') || id.includes('onnxruntime')) return 'embeddings';
                     if (id.includes('pdfjs-dist')) return 'pdfjs';
                     if (id.includes('mammoth')) return 'mammoth';
                     if (id.includes('jszip')) return 'jszip';

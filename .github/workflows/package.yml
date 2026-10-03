@@ -1,0 +1,31 @@
+name: Production packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+      - run: npm ci
+      - name: Check release tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: node --input-type=module -e 'import p from "./package.json" with {type:"json"}; if (process.env.GITHUB_REF_NAME !== `v${p.version}`) process.exit(1)'
+      - run: npm test
+      - run: npm run test:packaging
+      - run: npm run package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aspect-chat-packages
+          path: release/*
+          if-no-files-found: error

@@ -7,6 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "package": "node scripts/package.mjs all",
+    "package:web": "node scripts/package.mjs web",
+    "package:deb": "node scripts/package.mjs deb",
+    "test:packaging": "node --test tests/packaging.node.mjs",
     "test": "vitest run",
     "desktop:install": "bash desktop/aspect-chat-install.sh",
     "desktop:uninstall": "bash desktop/aspect-chat-uninstall.sh"
@@ -37,6 +41,7 @@
     "@codemirror/lang-javascript": "^6.2.5",
     "@fontsource/balsamiq-sans": "^5.3.0",
     "@fontsource/patrick-hand": "^5.3.0",
+    "@huggingface/transformers": "^3.8.1",
     "@mlc-ai/web-llm": "^0.2.84",
     "codemirror": "^6.0.2",
     "dompurify": "^3.4.11",

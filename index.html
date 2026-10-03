@@ -109,6 +109,16 @@
                 <input type="number" id="api-max-context-input" placeholder="20" min="1" max="500">
                 <p class="field-hint">How many past messages are sent with each request. Lower saves tokens; higher keeps more memory of the conversation.</p>
 
+                <label for="context-tokens-input">Model context window (tokens)</label>
+                <input type="number" id="context-tokens-input" min="512" step="512" value="8192">
+                <p class="field-hint">Match the context window configured in your inference engine. Near-limit requests show an estimated warning.</p>
+                <label for="tool-calling-mode">Tool calling</label>
+                <select id="tool-calling-mode"><option value="auto">Automatic by provider</option><option value="native">Native functions (model must support tools)</option><option value="markers">Text markers (legacy models)</option></select>
+                <label><input type="checkbox" id="semantic-retrieval-toggle" checked> Retrieve relevant knowledge chunks</label>
+                <label for="retrieval-top-k-input">Knowledge chunks per query</label>
+                <input type="number" id="retrieval-top-k-input" min="1" max="10" value="4">
+                <label><input type="checkbox" id="embedding-downloads-toggle"> Allow initial embedding model download</label>
+                <p class="field-hint">Embeddings run in your browser. Downloads fetch MiniLM model weights, never your documents. For offline use, install the model under /models/Xenova/all-MiniLM-L6-v2/. Without the model, keyword retrieval is used.</p>
                 <label for="tool-timeout-input">Tool timeout (seconds)</label>
                 <input type="number" id="tool-timeout-input" placeholder="30" min="1" max="600">
 

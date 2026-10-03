@@ -192,8 +192,8 @@ describe('extractNativeToolCalls', () => {
         ];
         const calls = extractNativeToolCalls(raw);
         expect(calls).toHaveLength(2);
-        expect(calls[0]).toEqual({ name: 'Weather', args: '{"city":"Tokyo"}' });
-        expect(calls[1]).toEqual({ name: 'Calculator', args: '{"expression":"2+2"}' });
+        expect(calls[0]).toEqual({ id: 'call_1', name: 'Weather', args: '{"city":"Tokyo"}' });
+        expect(calls[1]).toEqual({ id: 'call_2', name: 'Calculator', args: '{"expression":"2+2"}' });
     });
 
     it('skips entries with no function name in the array form', () => {
@@ -208,8 +208,8 @@ describe('extractNativeToolCalls', () => {
         ]);
         const calls = extractNativeToolCalls(m);
         expect(calls).toHaveLength(2);
-        expect(calls[0]).toEqual({ name: 'WeatherTool', args: '{"city":"Paris"}' });
-        expect(calls[1]).toEqual({ name: 'Calculator', args: '{"expr":"1+1"}' });
+        expect(calls[0]).toEqual({ id: 'c1', name: 'WeatherTool', args: '{"city":"Paris"}' });
+        expect(calls[1]).toEqual({ id: 'c2', name: 'Calculator', args: '{"expr":"1+1"}' });
     });
 
     it('returns entries in index order from the Map', () => {
@@ -425,7 +425,7 @@ describe('supportsNativeTools', () => {
     it('returns false for unknown / custom URLs (conservative default)', () => {
         expect(supportsNativeTools('https://my-custom-endpoint.example.com/v1')).toBe(false);
         expect(supportsNativeTools('http://localhost:5001/v1')).toBe(false); // KoboldCpp
-        expect(supportsNativeTools('http://localhost:8000/v1')).toBe(false); // vLLM
+        expect(supportsNativeTools('http://localhost:8000/v1')).toBe(true); // vLLM
         expect(supportsNativeTools('http://localhost:8080/v1')).toBe(false); // llama.cpp
     });
 

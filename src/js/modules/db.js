@@ -173,6 +173,7 @@ export async function saveKnowledgeFileBatch(entries) {
         const store = tx.objectStore('files');
 
         tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error('Knowledge batch transaction aborted'));
         tx.oncomplete = () => {
             // Update the in-memory cache only after the transaction commits.
             for (const { aspectId, name, text } of entries) {
@@ -187,8 +188,14 @@ export async function saveKnowledgeFileBatch(entries) {
             resolve();
         };
 
-        for (const { aspectId, name, text } of entries) {
-            store.put({ aspectId, name, text });
+        try {
+            for (const { aspectId, name, text } of entries) {
+                if (!aspectId || !name || typeof text !== 'string') throw new TypeError('Invalid knowledge entry');
+                store.put({ aspectId, name, text });
+            }
+        } catch (error) {
+            tx.abort();
+            reject(error);
         }
     });
 }
@@ -308,8 +315,15 @@ export async function deleteKnowledgeFile(aspectId, name) {
     await initCache();
     const db = await getDB();
     return new Promise((resolve, reject) => {
-        const tx = db.transaction('files', 'readwrite');
+        const tx = db.transaction(['files', 'vectors'], 'readwrite');
         tx.objectStore('files').delete([aspectId, name]);
+        const vectors = tx.objectStore('vectors');
+        vectors.index('aspectId').openCursor(IDBKeyRange.only(aspectId)).onsuccess = (e) => {
+            const cursor = e.target.result;
+            if (!cursor) return;
+            if (cursor.value.name === name) cursor.delete();
+            cursor.continue();
+        };
         tx.oncomplete = () => {
             if (knowledgeCache[aspectId]) {
                 knowledgeCache[aspectId] = knowledgeCache[aspectId].filter(f => f.name !== name);
@@ -324,7 +338,13 @@ export async function deleteAspectData(aspectId) {
     if (!aspectId) return;
     const db = await getDB();
     return new Promise((resolve, reject) => {
-        const tx = db.transaction(['files', 'memory'], 'readwrite');
+        const tx = db.transaction(['files', 'memory', 'vectors'], 'readwrite');
+        tx.objectStore('vectors').index('aspectId').openCursor(IDBKeyRange.only(aspectId)).onsuccess = (e) => {
+            const cursor = e.target.result;
+            if (!cursor) return;
+            cursor.delete();
+            cursor.continue();
+        };
 
         // Delete memory
         const memoryStore = tx.objectStore('memory');

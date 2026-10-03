@@ -175,9 +175,47 @@ When it kicks in, the chat says which provider answered and why. A user-initiate
 
 ## Development
 
+### Production packages
+
+```bash
+npm ci
+npm run package       # portable ZIP + Debian/Ubuntu .deb (requires dpkg-deb)
+npm run package:web   # portable ZIP only; works on Windows, macOS, and Linux
+npm run package:deb   # Debian/Ubuntu package only; requires dpkg-deb
+```
+
+Each command builds fresh production assets and writes versioned packages and
+SHA-256 checksum files to `release/`. Build with Node.js 22.12+ or 24.
+The ZIP contains `dist/`, a dependency-free local server, instructions, and the
+license. Extract it and run `node server.mjs --open` using Node.js 20.19+.
+No source checkout or `npm install` is needed to run a package. For static web
+hosting, deploy the ZIP's `dist/` contents instead.
+
+Install the Linux package with `sudo apt install ./release/aspect-chat-1.0.0_all.deb`
+(adjust the version as needed). It requires Node.js 20.19+ and `xdg-utils`.
+Launch **Aspect Studio** from the application menu or run
+`/usr/bin/aspect-chat --open`. The terminal stays open while serving the app;
+press Ctrl+C to stop. If you previously installed checkout-based desktop
+integration, run `npm run desktop:uninstall` first to remove its user-level
+launcher and menu entry.
+
+The packaged server listens only on `127.0.0.1`, using
+`http://localhost:43110/` by default. Set `ASPECT_CHAT_PORT` to change the port.
+Keep the same hostname and port to access the same browser-stored library;
+export/import your Aspects when moving between origins. Packages do not include
+model weights, model servers, or the optional bridges.
+
+The **Production packages** GitHub Actions workflow runs tests and builds both
+packages on manual dispatch or a `v<package.json version>` tag. Download the
+`aspect-chat-packages` artifact from the workflow run. It does not publish a
+GitHub Release automatically.
+
+### Local development
+
 ```bash
 npm run dev       # dev server
-npm test          # 410 tests (22 test suites)
+npm test          # application tests
+npm run test:packaging # packaged server checks
 npm run build     # production build to dist/
 npm run preview   # serve the build
 ```

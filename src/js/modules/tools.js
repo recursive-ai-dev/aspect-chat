@@ -12,10 +12,20 @@ import {
     hasUsableProvider,
     readSSEStream
 } from './llm.js';
-import { getApiEndpoint, buildHeaders, supportsNativeTools } from './providers.js';
+import { getApiEndpoint, buildHeaders } from './providers.js';
 import { runSandboxedTool } from './toolSandbox.js';
+import { retrieveKnowledge } from './retrieval.js';
+import { contextBudgetWarning } from './contextBudget.js';
 
 export { getApiEndpoint };
+
+async function knowledgePrompt(aspect, query, signal) {
+    if (state.settings.semanticRetrieval) {
+        const text = await retrieveKnowledge(aspect, query, state.settings, undefined, signal);
+        return buildSystemPrompt({ ...aspect, knowledge: '' }, text, state.settings.maxKnowledgeChars);
+    }
+    return buildSystemPrompt(aspect, await getKnowledgeFilesText(aspect.id), state.settings.maxKnowledgeChars);
+}
 
 let knowledgeTruncationWarned = false;
 
@@ -110,8 +120,7 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                 throw new Error("API credentials not configured.");
             }
 
-            const extraFileText = await getKnowledgeFilesText(aspect.id);
-            const systemPrompt = buildSystemPrompt(aspect, extraFileText, state.settings.maxKnowledgeChars);
+            const systemPrompt = await knowledgePrompt(aspect, prompt, signal);
 
             const apiMessages = [
                 { role: 'system', content: systemPrompt },
@@ -119,6 +128,7 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
             ];
 
             const params = getGenerationParams(aspect);
+            params.contextTokens = state.settings.contextTokens;
 
             try {
                 return await completeChat({ target: primary, messages: apiMessages, params, signal });
@@ -390,7 +400,8 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                 const resp = await fetch(req.url, {
                     method,
                     headers: req.headers || undefined,
-                    body: hasBody ? req.body : undefined
+                    body: hasBody ? req.body : undefined,
+                    signal: req.signal
                 });
                 const body = await resp.text();
                 return {
@@ -484,8 +495,11 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
          * If no annotation is found, a minimal permissive schema is generated.
          */
         export function buildToolSchema(tool) {
-            const name = (tool.name || 'UnknownTool').replace(/\.js$/i, '');
+            const name = (tool.name || 'UnknownTool').replace(/\.js$/i, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) || 'UnknownTool';
             const code = typeof tool.code === 'string' ? tool.code : '';
+            if (tool.parameters?.type === 'object') {
+                return { type: 'function', function: { name, description: tool.description || `Run ${name}`, parameters: tool.parameters } };
+            }
 
             // --- Style 2: JSON block comment ---
             const blockMatch = code.match(/\/\*\s*@schema\s*([\s\S]*?)\*\//);
@@ -552,6 +566,23 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                         parameters
                     }
                 };
+            }
+
+            // Standard JSDoc for object arguments: @param {string} args.city.
+            const properties = {};
+            const required = [];
+            for (const match of code.matchAll(/@param\s+\{([^}]+)\}\s+(\[?args\.[\w]+(?:=[^\]]*)?\]?)\s*([^\n*]*)/g)) {
+                const [, type, path, description] = match;
+                const key = path.replace(/^\[/, '').replace(/\]$/, '').split('=')[0].slice(5);
+                if (['__proto__', 'constructor', 'prototype'].includes(key)) continue;
+                const jsonType = ({ String: 'string', Number: 'number', Boolean: 'boolean', Object: 'object', Array: 'array' })[type] || type.toLowerCase();
+                if (!['string', 'number', 'integer', 'boolean', 'object', 'array'].includes(jsonType)) continue;
+                properties[key] = { type: jsonType, ...(description.trim() ? { description: description.trim() } : {}), ...(jsonType === 'array' ? { items: {} } : {}) };
+                if (!path.startsWith('[')) required.push(key);
+            }
+            if (Object.keys(properties).length) {
+                return { type: 'function', function: { name, description: tool.description || `Run ${name}`,
+                    parameters: { type: 'object', properties, required } } };
             }
 
             // --- Minimal fallback schema ---
@@ -705,12 +736,17 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
 
             let toolResultsText = "";
             let newAgenticToolCalls = [];
+            const nativeCalls = toolCalls.filter(call => call.native);
+            const nativeMessages = nativeCalls.length ? [{ role: 'assistant', content: null,
+                tool_calls: nativeCalls.map(call => ({ id: call.id, type: 'function', function: { name: call.functionName, arguments: call.args || '{}' } }))
+            }] : [];
 
             for (let tc of toolCalls) {
                 const logId = addSystemLog(`Executing tool \`${tc.name}\`...`);
                 const result = await executeJavaScriptTool(tc.name, tc.args);
                 updateSystemLog(logId, formatToolResultLog(tc.name, result));
                 toolResultsText += `Tool ${tc.name} returned:\n${result}\n\n`;
+                if (tc.native) nativeMessages.push({ role: 'tool', tool_call_id: tc.id, tool_name: tc.functionName, content: result });
 
                 newAgenticToolCalls.push(...readChainedToolCalls(result));
             }
@@ -732,7 +768,7 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                 return;
             }
 
-            await sendAIRequest(toolResultsText);
+            await sendAIRequest(toolResultsText, nativeMessages);
         }
 
 
@@ -744,7 +780,7 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
             }
         }
 
-        export async function sendAIRequest(extraContext) {
+        export async function sendAIRequest(extraContext, nativeMessages = []) {
             const aspect = getCurrentAspect();
             if (!aspect) return;
 
@@ -779,18 +815,23 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                 if (signal && signal.aborted) {
                     throw new DOMException('Aborted', 'AbortError');
                 }
-                const extraFileText = await getKnowledgeFilesText(aspect.id);
-                const systemPrompt = buildSystemPrompt(aspect, extraFileText, state.settings.maxKnowledgeChars);
-                const apiMessages = buildApiMessages(aspect, systemPrompt, extraContext, state.settings.maxContext);
+                const query = [...aspect.chatHistory].reverse().find(message => message.role === 'user')?.content || '';
+                const systemPrompt = await knowledgePrompt(aspect, query, signal);
+                const apiMessages = buildApiMessages(aspect, systemPrompt, nativeMessages.length ? '' : extraContext, state.settings.maxContext);
+                apiMessages.push(...nativeMessages);
                 const params = getGenerationParams(aspect);
+                params.contextTokens = state.settings.contextTokens;
+                params.toolCallingMode = state.settings.toolCallingMode;
 
                 // Native function calling: attach tool schemas when the provider
                 // supports it and the aspect has at least one trusted tool.
-                const nativeToolsEnabled = supportsNativeTools(state.settings.apiUrl);
+                const nativeToolsEnabled = state.settings.toolCallingMode !== 'markers';
                 if (nativeToolsEnabled) {
                     const toolsParam = buildToolsParam(aspect);
                     if (toolsParam.length > 0) params.tools = toolsParam;
                 }
+                const warning = contextBudgetWarning(apiMessages, params, state.settings.contextTokens);
+                if (outermost && warning && typeof window.showToast === 'function') window.showToast(warning, 'warning');
 
                 // Capture native tool calls so we can route them through the
                 // existing executeJavaScriptTool pipeline unchanged.
@@ -822,6 +863,7 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                         }
                     },
                     onFallback: (reason, target) => {
+                        nativeToolCallsOverride = null;
                         if (bubbleElement) {
                             const wrapper = bubbleElement.closest('.message-wrapper.streaming') || bubbleElement.parentElement;
                             if (wrapper) wrapper.remove();
@@ -836,9 +878,12 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                         // parseToolCalls produces, so processAIResponseAndTools
                         // can execute them without any changes.
                         nativeToolCallsOverride = calls.map(c => ({
+                            native: true,
+                            id: c.id || 'call_' + crypto.randomUUID(),
+                            functionName: c.name,
                             fullMatch: `[Run Tool: ${c.name}(${c.args})]`,
-                            name: c.name,
-                            args: c.args
+                            name: aspect.tools.find(tool => buildToolSchema(tool).function.name === c.name)?.name || c.name,
+                            args: typeof c.args === 'string' ? c.args : JSON.stringify(c.args)
                         }));
                     }
                 });
