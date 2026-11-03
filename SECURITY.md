@@ -19,7 +19,28 @@ Tool code runs inside an ephemeral `<iframe sandbox="allow-scripts">`. The
   conversations, other tools' code, memory, or the API key.
 * There is no handle to the parent DOM.
 * Cookies are not accessible.
-* The iframe is created fresh per execution and destroyed immediately after.
+* Mounted frame containers are pooled, but each execution gets a fresh opaque
+  document; tool globals and listeners are discarded before reuse.
+
+### Android native bridge isolation
+
+Before loading any tool source, the sandbox checks whether `androidBridge` is
+visible in its own global scope. If it is exposed, tool initialization fails
+closed and tells the user to update Android System WebView. Chat and provider
+settings remain available.
+
+Capacitor can fall back to Android's legacy
+[`addJavascriptInterface`](https://developer.android.com/reference/android/webkit/WebView#addJavascriptInterface(java.lang.Object,%20java.lang.String)),
+which exposes native methods to every frame, including sandboxed iframes.
+Modern [`addWebMessageListener`](https://developer.android.com/reference/androidx/webkit/WebViewCompat#addWebMessageListener(android.webkit.WebView,java.lang.String,java.util.Set%3Cjava.lang.String%3E,androidx.webkit.WebViewCompat.WebMessageListener))
+restricts injection to configured origins; opaque tool origins do not match the
+app's localhost origin, and Capacitor additionally rejects non-main-frame calls.
+The sandbox never attempts to hide or overwrite an exposed bridge and then run
+untrusted code.
+
+The legacy-exposure rejection and isolated-frame success paths are covered by
+bootstrap tests. Real Android WebView/picker behavior requires device testing;
+host tests do not establish execution on a particular WebView version.
 
 The iframe is *not* a Web Worker. Earlier versions of this document described
 Web Workers; that description was incorrect.
@@ -62,7 +83,10 @@ An origin-scoped allowlist means approval of `https://api.weather.gov` does
 undeclared origin always re-prompt the user, preventing SSRF pivots where
 an approved endpoint is followed by an exfiltration attempt to a different host.
 
-Every brokered outbound request emits an immutable audit event into the chat
+Automatic HTTP redirects are rejected before forwarding. Tools must request
+the direct destination URL so its origin can be approved.
+
+Every brokered outbound request emits an audit event into the chat
 transcript so the user can see what the tool contacted.
 
 Network permissions (`allowNetwork`, `allowedOrigins`) are **per-tool** fields
@@ -71,13 +95,14 @@ can be revoked at any time from the tool's Network button in the editor.
 
 ---
 
-## 4. Tool Trust — Per-Tool Cryptographic Hash
+## 4. Tool Trust — Per-Tool Source Fingerprint
 
 A tool is only trusted to execute if its current source code precisely matches
 the `trustedHash` stored alongside it.
 
 `trustedHash` is an FNV-1a hash of the tool's source (`hashToolCode` in
-`aspects.js`). The hash is tamper-evident: any modification to tool code —
+`aspects.js`). This non-cryptographic fingerprint detects ordinary code edits; it is not a
+cryptographic signature or collision-resistant integrity proof. Modification to tool code —
 in the editor, or during an import — zeroes out or desynchronises the stored
 hash, disabling automatic execution by LLM invocation markers
 (`[Run Tool: ToolName.js({…})]`) until the user explicitly re-confirms the
@@ -123,6 +148,9 @@ incoming file before `normalizeAspect` runs. It:
 * Retains only `{ name, code, state }` per tool.
 * Explicitly drops `trustedHash`, `allowNetwork`, and `allowedOrigins`.
 * Sets `toolsReviewed: false` whenever any tools are present.
+* Discards message render caches and transient editing flags, forcing content
+  through the current Markdown sanitizer. The same rule applies to database,
+  snapshot and legacy-storage hydration.
 
 `backup.js → importAllAspects` pipes through `sanitizeImportedAspect` before
 handing Aspects to `normalizeAspect`, closing the F-01 library-import review
@@ -206,7 +234,7 @@ use cases.
 ## 10. API Key Handling
 
 The API key is stored in `localStorage` by default (controlled by the
-"Remember API key" toggle). When the toggle is off, the key is kept only in
+"Remember API key" toggle). The same storage policy applies to primary and fallback keys. When the toggle is off, each key is kept only in
 `sessionStorage` and cleared when the tab closes.
 
 API keys are **never** sent to Aspect Studio's own servers — there are none.
@@ -236,6 +264,25 @@ It does **not** cover:
 * A malicious browser extension with access to the page's `window`.
 * A provider endpoint that logs prompts (use local models if this is a concern).
 * Physical access to the machine running the browser.
+
+## 12. Android sprint dependency audit (2026-11-03)
+
+Compatible updates reduced the locked dependency audit from 17 findings (1 critical, 5 high,
+11 moderate) to 6 (0 critical, 2 high, 4 moderate). DOMPurify, Vite, Vitest, source-map-js and
+undici were patched; rimraf 6.1.4 updates glob/minimatch to patched 14.0.3/11.0.4 releases.
+Sanitizer and build regressions were executed.
+
+Remaining findings are transitive upstream constraints: Transformers 3.8.1 → sharp 0.34.5
+(two high aggregate findings, Node image-processing path excluded from the browser/WebView
+bundle); Capacitor assets 4.0.0 → trapezedev 7.1.11 → xcode 3.0.1 → uuid 7.0.3 (four moderate
+tooling findings). No compatible upstream patch is available for either chain. They remain
+tracked in TODO.md as blocked upstream work. No blanket version override, sanitizer exception
+or major embedding-engine migration was used to hide these findings. Run `npm audit` again
+before distribution because advisories and compatible fixes can change.
+
+Memory keys beginning with `~` are session-only: durable memory writes, Aspect serialization,
+snapshots and both export formats omit them. Existing already-exported backups may contain
+session memory from older versions and cannot be changed retroactively.
 
 ---
 

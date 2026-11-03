@@ -15,7 +15,9 @@ import {
     getPersistState,
     armPersistence,
     serializeLibrary,
-    parseLibrary
+    parseLibrary,
+    writeSnapshot,
+    getSnapshot
 } from '../src/js/modules/persist.js';
 import { normalizeConversations } from '../src/js/modules/conversations.js';
 import { normalizeAspect, isToolTrusted, hashToolCode } from '../src/js/modules/aspects.js';
@@ -167,7 +169,8 @@ describe('persistence arming after a load failure', () => {
         expect(rows.map(r => r.id).sort()).toEqual(['added', 'keep']);
     });
 
-    it('stays armed when a read error still finds data in the legacy localStorage blob', async () => {
+    it('keeps recovered legacy data read-only rather than overwriting unread newer records', async () => {
+        await saveAspects([makeAspect({ id: 'newer', name: 'Authoritative' })]);
         localStorage.setItem('aspects_data', JSON.stringify([{ id: 'legacy', name: 'From Blob', conversations: [] }]));
         localStorage.removeItem('aspects_migrated_to_idb');
 
@@ -176,8 +179,27 @@ describe('persistence arming after a load failure', () => {
         spy.mockRestore();
 
         expect(loaded.map(a => a.id)).toEqual(['legacy']);
-        expect(isPersistReady()).toBe(true);
+        expect(isPersistReady()).toBe(false);
+        await scheduleSave(loaded);
+        await flushSave();
+        await expect(saveAspects(loaded)).rejects.toThrow('read-only');
+        const rows = await withStore(STORE_ASPECTS, 'readonly', s => requestToPromise(s.getAll()));
+        expect(rows.map(a => a.id)).toEqual(['newer']);
         localStorage.removeItem('aspects_data');
+    });
+
+    it('cancels a save already queued when a load fails', async () => {
+        await saveAspects([makeAspect({ id: 'keep' })]);
+        const queued = scheduleSave([makeAspect({ id: 'wrong' })]);
+        const spy = vi.spyOn(idb, 'withStore').mockRejectedValue(new Error('temporary read failure'));
+        await expect(loadAspects()).rejects.toThrow('temporary read failure');
+        spy.mockRestore();
+        await queued;
+        await flushSave();
+        const rows = await withStore(STORE_ASPECTS, 'readonly', s => requestToPromise(s.getAll()));
+        expect(rows.map(a => a.id)).toEqual(['keep']);
+        await loadAspects();
+        expect(isPersistReady()).toBe(true);
     });
 });
 
@@ -245,6 +267,33 @@ describe('migrateFromLocalStorage', () => {
         await expect(migrateFromLocalStorage()).resolves.toBeNull();
     });
 
+    it('does not replace existing rows when migration bookkeeping is missing', async () => {
+        await saveAspects([makeAspect({ id: 'new', name: 'Newer library' })]);
+        localStorage.setItem('aspects_data', JSON.stringify([{ id: 'stale', name: 'Old backup' }]));
+        const loaded = await loadAspects();
+        expect(loaded.map(a => a.id)).toEqual(['new']);
+        expect(localStorage.getItem('aspects_data_v1_backup')).toContain('stale');
+    });
+
+    it('makes concurrent first migrations insert only one library', async () => {
+        localStorage.setItem('aspects_data', JSON.stringify([{ id: 'old', name: 'Legacy' }]));
+        const results = await Promise.all([migrateFromLocalStorage(), migrateFromLocalStorage()]);
+        expect(results.filter(Boolean)).toHaveLength(1);
+        const rows = await withStore(STORE_ASPECTS, 'readonly', s => requestToPromise(s.getAll()));
+        expect(rows.map(a => a.id)).toEqual(['old']);
+    });
+
+    it('preserves newer rows when localStorage bookkeeping fails repeatedly', async () => {
+        localStorage.setItem('aspects_data', JSON.stringify([{ id: 'old', name: 'Legacy' }]));
+        const spy = vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('quota'); });
+        await migrateFromLocalStorage();
+        await saveAspects([makeAspect({ id: 'new', name: 'Edited after migration' })]);
+        await migrateFromLocalStorage();
+        spy.mockRestore();
+        const rows = await withStore(STORE_ASPECTS, 'readonly', s => requestToPromise(s.getAll()));
+        expect(rows.map(a => a.id)).toEqual(['new']);
+    });
+
     it('leaves an unparseable blob alone rather than destroying it', async () => {
         const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
         localStorage.setItem('aspects_data', 'not json{');
@@ -271,6 +320,14 @@ describe('migrateFromLocalStorage', () => {
 });
 
 describe('parseLibrary — imported tool sanitisation (F001/F002)', () => {
+    it.each([[null], [[]], [42], ['aspect']])('rejects malformed records atomically: %j', record => {
+        expect(() => parseLibrary(JSON.stringify({ aspects: [{ name: 'Valid' }, record] }))).toThrow('invalid Aspect');
+    });
+
+    it('rejects unknown explicit formats and versions', () => {
+        expect(() => parseLibrary(JSON.stringify({ format: 'other', aspects: [{}] }))).toThrow('format');
+        expect(() => parseLibrary(JSON.stringify({ version: 999, aspects: [{}] }))).toThrow('version');
+    });
     it('strips trustedHash, allowNetwork and allowedOrigins from imported tools', () => {
         const hostile = JSON.stringify({
             aspects: [{
@@ -327,5 +384,22 @@ describe('parseLibrary — imported tool sanitisation (F001/F002)', () => {
         const [reimported] = parseLibrary(exported);
         expect(reimported.toolsReviewed).toBe(false);
         expect(isToolTrusted(normalizeAspect({ ...reimported, id: 'r2' }).tools[0])).toBe(false);
+    });
+});
+
+describe('ephemeral memory durability', () => {
+    beforeEach(freshDatabase);
+
+    it('excludes session memory and listeners from saves, exports and snapshots', async () => {
+        const aspect = makeAspect({ memory: { '~session-secret': 'private', durable: 'kept' }, memoryListeners: { durable: ['watcher'] } });
+        await saveAspects([aspect]);
+        expect(aspect.memory['~session-secret']).toBe('private');
+        const [loaded] = await loadAspects();
+        expect(loaded.memory).toEqual({ durable: 'kept' });
+        expect(loaded.memoryListeners).toBeUndefined();
+        expect(serializeLibrary([aspect])).not.toContain('session-secret');
+        const snapshot = await getSnapshot(await writeSnapshot([aspect], 'test'));
+        expect(snapshot.aspects[0].memory).toEqual({ durable: 'kept' });
+        expect(parseLibrary(JSON.stringify({ aspects: [aspect] }))[0].memory).toEqual({ durable: 'kept' });
     });
 });

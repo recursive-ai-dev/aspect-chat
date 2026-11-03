@@ -633,3 +633,21 @@ describe('Basic / Advanced instruction modes', () => {
         expect(document.getElementById('advanced-config-area')).not.toHaveClass('hidden');
     });
 });
+
+describe('library operation mutation isolation', () => {
+    afterEach(() => { stateModule.state.libraryBusy = false; stateModule.state.isGenerating = false; });
+    it('keeps conversations and editor fields unchanged until a library operation completes', () => {
+        const aspect = aspectsModule.normalizeAspect({ id: 'busy', name: 'Owner', instructions: 'original' });
+        aspectsModule.getCurrentAspect.mockReturnValue(aspect);
+        stateModule.state.libraryBusy = true;
+        const before = JSON.stringify(aspect);
+        ui.newConversation();
+        ui.selectConversation('other');
+        ui.confirmDeleteConversation(aspect.activeConversationId);
+        ui.promptRenameConversation(aspect.activeConversationId);
+        ui.updateBasicInstructions();
+        ui.updateGenerationParam('temperature', '1.9');
+        ui.selectPresetBackground('changed');
+        expect(JSON.stringify(aspect)).toBe(before);
+    });
+});

@@ -3,6 +3,7 @@ import { getKnowledgeFilesText, saveMemory } from './db.js';
 import { markChangesUnsaved, setChatLoadingState, renderConversationList } from './ui.js';
 import { getCurrentAspect, isToolTrusted } from './aspects.js';
 import { state, getGenerationParams } from './state.js';
+import { normalizeNumericSetting } from './numericSettings.js';
 import { touchActiveConversation } from './conversations.js';
 import {
     streamChatWithFallback,
@@ -72,7 +73,7 @@ export function buildApiMessages(aspect, systemPrompt, extraContext, maxContext)
 
     const history = Array.isArray(aspect?.chatHistory) ? aspect.chatHistory : [];
     const contextMessages = history.filter(msg => msg && (msg.role === 'user' || msg.role === 'assistant'));
-    const slicedMessages = contextMessages.slice(-maxContext);
+    const slicedMessages = contextMessages.slice(-normalizeNumericSetting('maxContext', maxContext));
 
     slicedMessages.forEach(msg => {
         apiMessages.push({ role: msg.role === 'user' ? 'user' : 'assistant', content: String(msg.content ?? '') });
@@ -116,10 +117,6 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
          */
         export async function fetchAIResponseForAspect(aspect, prompt, signal) {
             const primary = primaryTarget(state.settings);
-            if (!primary.isWebLLM && !primary.url) {
-                throw new Error("API credentials not configured.");
-            }
-
             const systemPrompt = await knowledgePrompt(aspect, prompt, signal);
 
             const apiMessages = [
@@ -133,7 +130,7 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
             try {
                 return await completeChat({ target: primary, messages: apiMessages, params, signal });
             } catch (err) {
-                if (err && err.name === 'AbortError') throw err;
+                if (err?.name === 'AbortError' || signal?.aborted) throw err;
                 const secondary = fallbackTarget(state.settings);
                 if (!secondary) throw err;
                 return completeChat({ target: secondary, messages: apiMessages, params, signal });
@@ -180,10 +177,10 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                 }
 
                 if (!tool.state) tool.state = {};
+                const signal = state.abortController?.signal;
+                throwIfAborted(signal);
 
-                const timeoutMs = Number.isFinite(state.settings.toolTimeoutMs) && state.settings.toolTimeoutMs > 0
-                    ? state.settings.toolTimeoutMs
-                    : 30000;
+                const timeoutMs = normalizeNumericSetting('toolTimeoutMs', state.settings.toolTimeoutMs);
 
                 const { result, state: nextState } = await runSandboxedTool({
                     code: tool.code,
@@ -191,11 +188,12 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                     state: tool.state,
                     memory: aspect.memory || {},
                     timeoutMs,
-                    signal: state.abortController ? state.abortController.signal : undefined,
+                    signal,
                     onPrivileged: (msg, post) => handlePrivilegedToolMessage(aspect, msg, post),
                     onNetwork: (req) => brokerToolFetch(aspect, tool, req)
                 });
 
+                throwIfAborted(signal);
                 // The sandbox mutates a structured-clone copy of state; adopt it,
                 // but refuse a runaway blob (persisted to IndexedDB and baked
                 // into every .aspect export).
@@ -401,7 +399,10 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                     method,
                     headers: req.headers || undefined,
                     body: hasBody ? req.body : undefined,
-                    signal: req.signal
+                    signal: req.signal,
+                    // Fetch cannot expose a cross-origin redirect safely for a
+                    // second approval. Reject before forwarding any request.
+                    redirect: 'error'
                 });
                 const body = await resp.text();
                 return {
@@ -412,7 +413,7 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                     body
                 };
             } catch (err) {
-                return { ok: false, error: (err && err.message) || String(err) };
+                return { ok: false, error: `${err?.message || String(err)}. Tool requests require a direct URL; automatic redirects are blocked.` };
             }
         }
 
@@ -742,8 +743,10 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
             }] : [];
 
             for (let tc of toolCalls) {
+                throwIfAborted(state.abortController?.signal);
                 const logId = addSystemLog(`Executing tool \`${tc.name}\`...`);
                 const result = await executeJavaScriptTool(tc.name, tc.args);
+                throwIfAborted(state.abortController?.signal);
                 updateSystemLog(logId, formatToolResultLog(tc.name, result));
                 toolResultsText += `Tool ${tc.name} returned:\n${result}\n\n`;
                 if (tc.native) nativeMessages.push({ role: 'tool', tool_call_id: tc.id, tool_name: tc.functionName, content: result });
@@ -781,6 +784,7 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
         }
 
         export async function sendAIRequest(extraContext, nativeMessages = []) {
+            if (state.libraryBusy) return;
             const aspect = getCurrentAspect();
             if (!aspect) return;
 
@@ -919,12 +923,7 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
                 dropPlaceholder();
                 state.generationDepth = Math.max(0, (state.generationDepth || 1) - 1);
 
-                if (state.generationDepth === 0) {
-                    state.isGenerating = false;
-                    setChatLoadingState(false);
-                    state.abortController = null;
-                    state.consecutiveToolRuns = 0;
-                }
+                finishGeneration();
 
                 renderChatMessages();
                 touchActiveConversation(aspect);
@@ -936,109 +935,93 @@ export async function handleStreamResponse(reader, createStreamingBubble, update
             }
         }
 
+        function throwIfAborted(signal) {
+            if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+        }
+
+        function finishGeneration() {
+            if (state.generationDepth !== 0) return;
+            state.isGenerating = false;
+            setChatLoadingState(false);
+            state.abortController = null;
+            state.consecutiveToolRuns = 0;
+        }
+
         export async function sendMessage() {
             const input = document.getElementById('chat-input');
-            const text = input.value.trim();
+            const text = input?.value.trim();
             if (!text) return;
-
             const aspect = getCurrentAspect();
             if (!aspect) return;
-
-            if (state.isGenerating) {
-                if (typeof window !== 'undefined' && window.showToast) {
-                    window.showToast('Wait for the current response to finish, or press Stop.', 'error');
-                }
+            if (state.isGenerating || state.libraryBusy) {
+                window.showToast?.(state.libraryBusy ? 'Wait for the library operation to finish.' : 'Wait for the current response to finish, or press Stop.', 'error');
                 return;
             }
-
-            // No provider configured yet — open Settings instead of letting the
-            // request fail into an error bubble. The message stays in the box.
             if (!hasUsableProvider(state.settings)) {
-                if (typeof window !== 'undefined' && window.showToast) {
-                    window.showToast('Choose a provider and model to start chatting.', 'error');
-                }
-                if (typeof window !== 'undefined' && typeof window.openSettings === 'function') {
-                    window.openSettings();
-                }
+                window.showToast?.('Choose a provider and model to start chatting.', 'error');
+                window.openSettings?.();
                 return;
             }
 
-            // Check for @AspectName mention at the beginning
-            const summonMatch = text.match(/^@([a-zA-Z0-9_\-]+)\s+(.*)$/s);
-            if (summonMatch) {
-                const targetName = summonMatch[1];
-                const prompt = summonMatch[2];
-                const targetAspect = state.aspects.find(a => a.name.toLowerCase() === targetName.toLowerCase());
+            // This scope owns the entire turn, including tools explicitly typed
+            // by the user and summons, before any asynchronous work can yield.
+            state.isGenerating = true;
+            state.generationDepth = 1;
+            state.consecutiveToolRuns = 0;
+            state.abortController?.abort();
+            const controller = new AbortController();
+            state.abortController = controller;
+            setChatLoadingState(true);
+            try {
+                aspect.chatHistory.push({ role: 'user', content: text });
+                input.value = '';
+                input.style.height = 'auto';
+                touchActiveConversation(aspect);
+                renderChatMessages();
+                markChangesUnsaved();
 
+                const summonMatch = text.match(/^@([a-zA-Z0-9_\-]+)\s+(.*)$/s);
+                const targetAspect = summonMatch && state.aspects.find(a => a.name.toLowerCase() === summonMatch[1].toLowerCase());
                 if (targetAspect) {
-                    aspect.chatHistory.push({ role: 'user', content: text });
-                    input.value = '';
-                    input.style.height = 'auto';
-                    renderChatMessages();
-                    markChangesUnsaved();
-
+                    const prompt = summonMatch[2];
                     const logId = addSystemLog(`Summoning \`${targetAspect.name}\`...`);
-
-                    // A summon is a real generation: show the Stop button and
-                    // give it an abort controller so a slow one can be cancelled.
-                    state.consecutiveToolRuns = 0;
-                    setChatLoadingState(true);
-                    state.isGenerating = true;
-                    if (state.abortController) state.abortController.abort();
-                    state.abortController = new AbortController();
-
-                    let response;
                     try {
-                        response = await fetchAIResponseForAspect(
-                            targetAspect, prompt, state.abortController.signal
-                        );
+                        const response = await fetchAIResponseForAspect(targetAspect, prompt, controller.signal);
+                        throwIfAborted(controller.signal);
+                        updateSystemLog(logId, `✨ **${targetAspect.name} responds:**\n\n${response}`);
+                        await sendAIRequest(`User summoned ${targetAspect.name} with prompt: "${prompt}".\n${targetAspect.name} responded: "${response}"`);
                     } catch (err) {
-                        const aborted = err && (err.name === 'AbortError' || state.abortController?.signal.aborted);
-                        updateSystemLog(logId, aborted
+                        updateSystemLog(logId, controller.signal.aborted || err.name === 'AbortError'
                             ? `⚠️ **Summon of ${targetAspect.name} stopped.**`
                             : `❌ **Failed to summon ${targetAspect.name}:** ${err.message}`);
-                        state.isGenerating = false;
-                        setChatLoadingState(false);
-                        state.abortController = null;
-                        return;
                     }
-
-                    updateSystemLog(logId, `✨ **${targetAspect.name} responds:**\n\n${response}`);
-                    const extraContext = `User summoned ${targetAspect.name} with prompt: "${prompt}".\n${targetAspect.name} responded: "${response}"`;
-
-                    // Hand off to the normal generation path, which re-arms its
-                    // own state as the outermost call.
-                    state.isGenerating = false;
-                    setChatLoadingState(false);
-                    state.abortController = null;
-                    await sendAIRequest(extraContext);
                     return;
                 }
-            }
 
-            aspect.chatHistory.push({ role: 'user', content: text });
-            input.value = '';
-            input.style.height = 'auto'; // Reset textarea height
-            touchActiveConversation(aspect);
-            renderChatMessages();
-            markChangesUnsaved();
-
-
-            state.consecutiveToolRuns = 0;
-
-            let userToolResults = "";
-            const userToolCalls = parseToolCalls(text).slice(0, MAX_TOOL_CALLS_PER_MESSAGE);
-
-            if (userToolCalls.length > 0) {
-                for (let tc of userToolCalls) {
+                let userToolResults = '';
+                const userToolCalls = parseToolCalls(text).slice(0, MAX_TOOL_CALLS_PER_MESSAGE);
+                for (const tc of userToolCalls) {
+                    throwIfAborted(controller.signal);
                     const logId = addSystemLog(`Executing user-triggered tool \`${tc.name}\`...`);
                     const result = await executeJavaScriptTool(tc.name, tc.args);
+                    throwIfAborted(controller.signal);
                     updateSystemLog(logId, formatToolResultLog(tc.name, result, { userTriggered: true }));
                     userToolResults += `User executed tool ${tc.name} which returned:\n${result}\n\n`;
                 }
+                throwIfAborted(controller.signal);
+                await sendAIRequest(userToolResults);
+            } catch (error) {
+                addSystemLog(controller.signal.aborted || error.name === 'AbortError'
+                    ? '⚠️ **Generation stopped by user.**'
+                    : `❌ **Error:** ${error.message}`);
+            } finally {
+                state.generationDepth = Math.max(0, state.generationDepth - 1);
+                finishGeneration();
+                touchActiveConversation(aspect);
+                renderChatMessages();
+                renderConversationList();
+                markChangesUnsaved();
             }
-
-            await sendAIRequest(userToolResults);
         }
 
         // Close the tools dropdown when clicking elsewhere.

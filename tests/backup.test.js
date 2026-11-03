@@ -8,6 +8,7 @@ import {
     MAX_BACKUP_FILE_SIZE
 } from '../src/js/modules/backup.js';
 import { state } from '../src/js/modules/state.js';
+import { flushAspects } from '../src/js/modules/state.js';
 import * as persist from '../src/js/modules/persist.js';
 import * as ui from '../src/js/modules/ui.js';
 import * as aspects from '../src/js/modules/aspects.js';
@@ -25,7 +26,9 @@ vi.mock('../src/js/modules/persist.js', () => ({
     listSnapshots: vi.fn(),
     getSnapshot: vi.fn(),
     writeSnapshot: vi.fn(),
-    armPersistence: vi.fn()
+    armPersistence: vi.fn(),
+    disarmPersistence: vi.fn(),
+    isPersistReady: vi.fn(() => true)
 }));
 
 vi.mock('../src/js/modules/ui.js', () => ({
@@ -44,7 +47,8 @@ vi.mock('../src/js/modules/state.js', () => ({
         aspects: [],
         currentAspectId: null
     },
-    persistAspects: vi.fn()
+    persistAspects: vi.fn(),
+    flushAspects: vi.fn().mockResolvedValue(undefined)
 }));
 
 describe('backup.js - Whole library backup and recovery', () => {
@@ -65,6 +69,10 @@ describe('backup.js - Whole library backup and recovery', () => {
         });
         state.aspects = [];
         state.currentAspectId = null;
+        state.libraryBusy = false;
+        state.isGenerating = false;
+        persist.writeSnapshot.mockResolvedValue('pre-restore-snapshot');
+        persist.isPersistReady.mockReturnValue(true);
         localStorage.clear();
     });
 
@@ -80,9 +88,9 @@ describe('backup.js - Whole library backup and recovery', () => {
             expect(mockAnchor.click).not.toHaveBeenCalled();
         });
 
-        it('should download serialized library when aspects exist', () => {
+        it('should download serialized library when aspects exist', async () => {
             state.aspects = [{ id: 'a1', name: 'Aspect 1' }];
-            exportAllAspects();
+            await exportAllAspects();
             expect(persist.serializeLibrary).toHaveBeenCalledWith(state.aspects);
             expect(mockAnchor.download).toMatch(/^aspect-studio-library-.*\.aspects\.json$/);
             expect(mockAnchor.click).toHaveBeenCalled();
@@ -91,6 +99,28 @@ describe('backup.js - Whole library backup and recovery', () => {
     });
 
     describe('importAllAspects', () => {
+        it('rolls back state and selection when the durable save fails', async () => {
+            state.aspects = [{ id: 'old', name: 'Keep' }];
+            state.currentAspectId = 'old';
+            flushAspects.mockRejectedValueOnce(new Error('quota exceeded'));
+            await importAllAspects({ size: 100, text: async () => '{"aspects":[{"name":"Incoming"}]}' });
+            expect(state.aspects).toEqual([{ id: 'old', name: 'Keep' }]);
+            expect(state.currentAspectId).toBe('old');
+            expect(state.libraryBusy).toBe(false);
+            expect(window.showToast).toHaveBeenCalledWith(expect.stringContaining('quota exceeded'), 'error');
+            expect(window.showToast).not.toHaveBeenCalledWith('Imported 1 Aspect(s).');
+        });
+
+        it('refuses imports during recovery or generation', async () => {
+            persist.isPersistReady.mockReturnValueOnce(false);
+            const file = { size: 10, text: vi.fn() };
+            await importAllAspects(file);
+            expect(file.text).not.toHaveBeenCalled();
+            state.isGenerating = true;
+            await importAllAspects(file);
+            expect(file.text).not.toHaveBeenCalled();
+            expect(state.aspects).toEqual([]);
+        });
         it('should safely do nothing if file is null', async () => {
             await importAllAspects(null);
             expect(window.showToast).not.toHaveBeenCalled();
@@ -116,7 +146,7 @@ describe('backup.js - Whole library backup and recovery', () => {
             };
             await importAllAspects(invalidFile);
             expect(window.showToast).toHaveBeenCalledWith(
-                expect.stringContaining('Could not read that file:'),
+                expect.stringContaining('Could not import that file:'),
                 'error'
             );
         });
@@ -154,6 +184,45 @@ describe('backup.js - Whole library backup and recovery', () => {
     });
 
     describe('restoreSnapshot', () => {
+        it('keeps the old library if a pre-restore snapshot cannot be written', async () => {
+            const old = [{ id: 'old', name: 'Keep' }];
+            state.aspects = old;
+            state.currentAspectId = 'old';
+            persist.getSnapshot.mockResolvedValueOnce({ aspects: [{ id: 'new' }] });
+            persist.writeSnapshot.mockResolvedValueOnce(null);
+            expect(await restoreSnapshot('snap')).toBe(false);
+            expect(state.aspects).toBe(old);
+            expect(state.currentAspectId).toBe('old');
+            expect(state.libraryBusy).toBe(false);
+        });
+
+        it('rolls back a rejected restore save and retains recovery write protection', async () => {
+            const old = [{ id: 'old', name: 'Keep' }];
+            state.aspects = old;
+            state.currentAspectId = 'old';
+            persist.isPersistReady.mockReturnValueOnce(false);
+            persist.getSnapshot.mockResolvedValueOnce({ aspects: [{ id: 'new' }], createdAt: 1 });
+            flushAspects.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('transaction aborted'));
+            expect(await restoreSnapshot('snap')).toBe(false);
+            expect(state.aspects).toBe(old);
+            expect(state.currentAspectId).toBe('old');
+            expect(persist.disarmPersistence).toHaveBeenCalled();
+            expect(window.showToast).toHaveBeenCalledWith(expect.stringContaining('transaction aborted'), 'error');
+        });
+
+        it('holds the library lock until restore persistence has completed', async () => {
+            let finish;
+            const commit = new Promise(resolve => { finish = resolve; });
+            persist.getSnapshot.mockResolvedValueOnce({ aspects: [{ id: 'new' }], createdAt: 1 });
+            flushAspects.mockResolvedValueOnce(undefined).mockReturnValueOnce(commit);
+            const restore = restoreSnapshot('snap');
+            await vi.waitFor(() => expect(state.currentAspectId).toBe('new'));
+            expect(state.libraryBusy).toBe(true);
+            expect(window.showToast).not.toHaveBeenCalledWith(expect.stringContaining('Restored'));
+            finish();
+            expect(await restore).toBe(true);
+            expect(state.libraryBusy).toBe(false);
+        });
         it('should show error toast if snapshot cannot be found or has no aspects', async () => {
             persist.getSnapshot.mockResolvedValueOnce(null);
             const result = await restoreSnapshot('nonexistent');

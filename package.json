@@ -1,6 +1,6 @@
 {
   "name": "aspect-chat",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Create Aspects out of API LLM inference calls.",
   "main": "index.js",
   "scripts": {
@@ -11,6 +11,7 @@
     "package:web": "node scripts/package.mjs web",
     "package:deb": "node scripts/package.mjs deb",
     "test:packaging": "node --test tests/packaging.node.mjs",
+    "test:android-build": "node --test tests/androidBuild.node.mjs",
     "test": "vitest run",
     "desktop:install": "bash desktop/aspect-chat-install.sh",
     "desktop:uninstall": "bash desktop/aspect-chat-uninstall.sh",
@@ -37,12 +38,12 @@
     "@capacitor/cli": "^8.6.0",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/coverage-v8": "^4.1.12",
     "fake-indexeddb": "^6.2.5",
     "jsdom": "^29.1.1",
     "msw": "^2.15.0",
-    "vite": "^8.1.3",
-    "vitest": "^4.1.10"
+    "vite": "^8.3.5",
+    "vitest": "^4.1.12"
   },
   "dependencies": {
     "@capacitor/android": "^8.6.0",
@@ -53,7 +54,7 @@
     "@huggingface/transformers": "^3.8.1",
     "@mlc-ai/web-llm": "^0.2.84",
     "codemirror": "^6.0.2",
-    "dompurify": "^3.4.11",
+    "dompurify": "^3.4.17",
     "jszip": "^3.10.1",
     "mammoth": "^1.12.0",
     "marked": "^18.0.5",

@@ -482,3 +482,77 @@ describe('Settings Module', () => {
         });
     });
 });
+
+describe('settings race, numeric and session credential regressions', () => {
+    beforeEach(() => {
+        localStorage.clear(); sessionStorage.clear();
+        state.settings = { provider: 'custom', apiUrl: '', apiKey: '', model: '', maxContext: 20 };
+        document.body.innerHTML = `
+            <div id="settings-modal"></div>
+            <select id="api-provider-select"><option value="first">First</option><option value="second">Second</option><option value="custom">Custom</option></select>
+            <input id="api-url-input" value="http://localhost:1234/v1"><input id="api-key-input">
+            <input id="api-model-input"><select id="api-model-select"></select><div id="model-fetch-status"></div>
+            <input id="api-max-context-input"><input id="tool-timeout-input"><input id="max-knowledge-chars-input">
+            <select id="fallback-provider-select"><option value="custom">Custom</option><option value="">None</option></select>
+            <input id="fallback-url-input" value="http://localhost:8080/v1"><input id="fallback-key-input"><input id="fallback-model-input"><select id="fallback-model-select"></select><div id="fallback-model-fetch-status"></div>
+            <input type="checkbox" id="remember-key-toggle">
+        `;
+    });
+    afterEach(() => { vi.restoreAllMocks(); server.resetHandlers(); });
+
+    it.each([false, true])('ignores stale %s model completion after newer discovery', async fallback => {
+        const { fetchFallbackModels } = await import('../src/js/modules/settings.js');
+        const prefix = fallback ? 'fallback' : 'api';
+        const run = fallback ? fetchFallbackModels : fetchModelsIfPossible;
+        let completeOld;
+        vi.spyOn(globalThis, 'fetch')
+            .mockImplementationOnce(() => new Promise(resolve => { completeOld = resolve; }))
+            .mockResolvedValueOnce(Response.json({ data: ['new-model'] }));
+        const old = run();
+        document.getElementById(`${prefix}-url-input`).value = 'http://localhost:9000/v1';
+        await run();
+        completeOld(Response.json({ data: ['obsolete-model'] }));
+        await old;
+        expect(document.getElementById(`${prefix}-model-input`).value).toBe('new-model');
+        expect(document.getElementById(`${prefix}-model-select`).options[0].value).toBe('new-model');
+    });
+
+    it('ignores a stale error after switching to Custom without another network call', async () => {
+        let rejectOld;
+        vi.spyOn(globalThis, 'fetch').mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectOld = reject; }));
+        const old = fetchModelsIfPossible();
+        document.getElementById('api-provider-select').value = 'custom';
+        await fetchModelsIfPossible();
+        rejectOld(new TypeError('obsolete failure'));
+        await old;
+        expect(document.getElementById('model-fetch-status').innerText).toBe('');
+    });
+
+    it('keeps both session keys, restores them on reload, and clears stale session copies when remembered', async () => {
+        document.getElementById('api-key-input').value = 'primary-session';
+        document.getElementById('fallback-key-input').value = 'fallback-session';
+        saveSettings();
+        expect(localStorage.getItem('apiKey')).toBeNull();
+        expect(localStorage.getItem('fallbackKey')).toBeNull();
+        expect(sessionStorage.getItem('fallbackKey')).toBe('fallback-session');
+        vi.resetModules();
+        const reloaded = await import('../src/js/modules/state.js');
+        expect(reloaded.state.settings.apiKey).toBe('primary-session');
+        expect(reloaded.state.settings.fallbackKey).toBe('fallback-session');
+        document.getElementById('remember-key-toggle').checked = true;
+        saveSettings();
+        expect(localStorage.getItem('fallbackKey')).toBe('fallback-session');
+        expect(sessionStorage.getItem('apiKey')).toBeNull();
+        expect(sessionStorage.getItem('fallbackKey')).toBeNull();
+    });
+
+    it('enforces HTML numeric limits in the save path', () => {
+        document.getElementById('api-max-context-input').value = '-10';
+        document.getElementById('tool-timeout-input').value = '999999999';
+        document.getElementById('max-knowledge-chars-input').value = '999999999';
+        saveSettings();
+        expect(state.settings.maxContext).toBe(1);
+        expect(state.settings.toolTimeoutMs).toBe(600000);
+        expect(state.settings.maxKnowledgeChars).toBe(5000000);
+    });
+});

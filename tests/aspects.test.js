@@ -123,6 +123,21 @@ describe('Aspects Management', () => {
             expect(stateModule.persistAspects).toHaveBeenCalled();
         });
 
+        it('uses independent copies of canonical tools while preserving public names', async () => {
+            const { systemTools } = await import('../src/js/modules/systemTools.js');
+            await aspects.loadDefaultAspects();
+            const tools = state.aspects[0].tools;
+            expect(tools.map(tool => tool.name)).toEqual(['Calculate.js', 'Weather.js', 'DateTime.js']);
+            for (const tool of tools) {
+                const canonicalName = tool.name === 'Calculate.js' ? 'Calculator.js' : tool.name;
+                const canonical = systemTools.find(source => source.name === canonicalName);
+                expect(tool.code).toBe(canonical.code);
+                expect(tool).not.toBe(canonical);
+                tool.state.changed = true;
+                expect(canonical.state).toBeUndefined();
+            }
+        });
+
         it('should load default Studio Guide if localStorage is invalid JSON', async () => {
             const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -132,6 +147,42 @@ describe('Aspects Management', () => {
             expect(state.aspects[0].id).toBe('studio-guide');
 
             spy.mockRestore();
+        });
+
+        it('owns startup loading before yielding and blocks creation, import and Send', async () => {
+            const persist = await import('../src/js/modules/persist.js');
+            let complete;
+            const load = vi.spyOn(persist, 'loadAspects').mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+            state.aspects = [aspects.normalizeAspect({ id: 'previous', name: 'Previous' })];
+            state.currentAspectId = 'previous';
+            document.body.insertAdjacentHTML('beforeend', '<input id="chat-input" value="queued message">');
+            const startup = aspects.loadDefaultAspects();
+            expect(state.libraryBusy).toBe(true);
+            aspects.acceptCreateAspect();
+            const { importAllAspects } = await import('../src/js/modules/backup.js');
+            const text = vi.fn();
+            await importAllAspects({ text });
+            const { sendMessage } = await import('../src/js/modules/tools.js');
+            await sendMessage();
+            expect(text).not.toHaveBeenCalled();
+            expect(state.aspects.map(aspect => aspect.id)).toEqual(['previous']);
+            expect(document.getElementById('chat-input').value).toBe('queued message');
+            complete([aspects.normalizeAspect({ id: 'loaded', name: 'Loaded' })]);
+            await startup;
+            expect(state.aspects.map(aspect => aspect.id)).toEqual(['loaded']);
+            expect(state.libraryBusy).toBe(false);
+            load.mockRestore();
+        });
+
+        it('always releases startup ownership after an authoritative read failure', async () => {
+            const persist = await import('../src/js/modules/persist.js');
+            const load = vi.spyOn(persist, 'loadAspects').mockRejectedValueOnce(new Error('read failed'));
+            const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+            await aspects.loadDefaultAspects();
+            expect(state.libraryBusy).toBe(false);
+            expect(state.aspects).toEqual([]);
+            load.mockRestore();
+            error.mockRestore();
         });
 
         it('should bypass store read and apply background when forceDefault is true', async () => {
@@ -450,5 +501,32 @@ describe('Aspects Management', () => {
             expect(ui.showEditorView).toHaveBeenCalled();
             expect(ui.markChangesUnsaved).toHaveBeenCalled();
         });
+    });
+});
+
+describe('active-turn Aspect mutation guards', () => {
+    beforeEach(() => {
+        state.aspects = [
+            aspects.normalizeAspect({ id: 'a', name: 'A' }),
+            aspects.normalizeAspect({ id: 'b', name: 'B' })
+        ];
+        state.currentAspectId = 'a';
+        state.isGenerating = true;
+        window.showToast = vi.fn();
+        window.confirm = vi.fn();
+    });
+    afterEach(() => { state.isGenerating = false; state.libraryBusy = false; state.abortController = null; });
+    it.each(['generation', 'library'])('blocks selection, deletion and creation during %s work', async mode => {
+        state.isGenerating = mode === 'generation';
+        state.libraryBusy = mode === 'library';
+        aspects.selectAspect('b');
+        await aspects.deleteCurrentAspect();
+        aspects.createNewAspect();
+        aspects.acceptCreateAspect();
+        aspects.acceptCreateAspectFromTemplate('blank');
+        expect(state.currentAspectId).toBe('a');
+        expect(state.aspects.map(a => a.id)).toEqual(['a', 'b']);
+        expect(window.confirm).not.toHaveBeenCalled();
+        expect(window.showToast).toHaveBeenCalledTimes(5);
     });
 });

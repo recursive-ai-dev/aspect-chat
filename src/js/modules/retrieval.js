@@ -1,5 +1,5 @@
 import { getKnowledgeFilesRaw } from './db.js';
-import { getDB, requestToPromise, withStore } from './idb.js';
+import { requestToPromise, withStore } from './idb.js';
 
 const MODEL = 'Xenova/all-MiniLM-L6-v2:q8:chunks-v1';
 let worker;
@@ -75,8 +75,7 @@ export async function retrieveKnowledge(aspect, query, settings = {}, embed = em
     if (!chunks.length) return '';
     let ranked;
     try {
-        const db = await getDB();
-        const cached = await requestToPromise(db.transaction('vectors').objectStore('vectors').index('aspectId').getAll(aspect.id));
+        const cached = await withStore('vectors', 'readonly', store => requestToPromise(store.index('aspectId').getAll(aspect.id)));
         const missing = [];
         const cacheIndex = new Map(cached.map(row => [JSON.stringify([row.name, row.chunkIndex]), row]));
         for (const chunk of chunks) {

@@ -1,6 +1,8 @@
 import { getCurrentAspect } from './aspects.js';
 
-import { getDB } from './idb.js';
+import { createTransaction } from './idb.js';
+import { state } from './state.js';
+import { durableMemory } from './memory.js';
 
 // pdf.js (~350 KB) and mammoth (~250 KB) are only needed when a user attaches a
 // PDF or .docx. Load them on first use so they stay out of the initial bundle.
@@ -66,24 +68,23 @@ export function listMemoryKeys(memory, prefix) {
 
 export async function saveMemory(aspectId, memoryObj) {
     if (!aspectId) return;
-    const db = await getDB();
+    const tx = await createTransaction('memory', 'readwrite');
     return new Promise((resolve, reject) => {
-        const tx = db.transaction('memory', 'readwrite');
-        tx.objectStore('memory').put({ aspectId, memory: memoryObj });
+        tx.objectStore('memory').put({ aspectId, memory: durableMemory(memoryObj) });
         tx.oncomplete = () => resolve();
         tx.onerror = (e) => reject(e.target.error);
+        tx.onabort = () => reject(tx.error || new Error('Memory transaction aborted'));
     });
 }
 
 export async function getMemory(aspectId) {
     if (!aspectId) return {};
-    const db = await getDB();
+    const tx = await createTransaction('memory', 'readonly');
     return new Promise((resolve, reject) => {
-        const tx = db.transaction('memory', 'readonly');
         const store = tx.objectStore('memory');
         const request = store.get(aspectId);
         request.onsuccess = () => {
-            resolve(request.result ? request.result.memory : {});
+            resolve(durableMemory(request.result?.memory));
         };
         request.onerror = (e) => reject(e.target.error);
     });
@@ -100,9 +101,8 @@ async function initCache() {
     if (initCachePromise) return initCachePromise;
 
     initCachePromise = (async () => {
-        const db = await getDB();
+        const tx = await createTransaction('files', 'readonly');
         return new Promise((resolve, reject) => {
-            const tx = db.transaction('files', 'readonly');
             const store = tx.objectStore('files');
             const request = store.getAll();
             request.onsuccess = () => {
@@ -119,8 +119,15 @@ async function initCache() {
                 initCachePromise = null;
                 reject(e.target.error);
             };
+            tx.onabort = () => {
+                initCachePromise = null;
+                reject(tx.error || new Error('Knowledge cache read aborted'));
+            };
         });
-    })();
+    })().catch(error => {
+        initCachePromise = null;
+        throw error;
+    });
     return initCachePromise;
 }
 
@@ -133,11 +140,10 @@ export function resetCacheForTesting() {
 export async function saveKnowledgeFile(aspectId, name, text) {
     if (!aspectId || !name) return;
     await initCache();
-    const db = await getDB();
+    const tx = await createTransaction('files', 'readwrite');
 
     // Sync with DB and update cache ONLY on success
     return new Promise((resolve, reject) => {
-        const tx = db.transaction('files', 'readwrite');
         tx.objectStore('files').put({ aspectId, name, text });
         tx.oncomplete = () => {
             if (!knowledgeCache[aspectId]) knowledgeCache[aspectId] = [];
@@ -150,6 +156,7 @@ export async function saveKnowledgeFile(aspectId, name, text) {
             resolve();
         };
         tx.onerror = (e) => reject(e.target.error);
+        tx.onabort = () => reject(tx.error || new Error('Knowledge file write aborted'));
     });
 }
 
@@ -166,13 +173,12 @@ export async function saveKnowledgeFile(aspectId, name, text) {
 export async function saveKnowledgeFileBatch(entries) {
     if (!entries || entries.length === 0) return;
     await initCache();
-    const db = await getDB();
+    const tx = await createTransaction('files', 'readwrite');
 
     return new Promise((resolve, reject) => {
-        const tx = db.transaction('files', 'readwrite');
         const store = tx.objectStore('files');
 
-        tx.onerror = () => reject(tx.error);
+        tx.onerror = e => reject(e.target.error || tx.error || new Error('Knowledge batch write failed'));
         tx.onabort = () => reject(tx.error || new Error('Knowledge batch transaction aborted'));
         tx.oncomplete = () => {
             // Update the in-memory cache only after the transaction commits.
@@ -200,6 +206,40 @@ export async function saveKnowledgeFileBatch(entries) {
     });
 }
 
+/** Commit a serialized imported Aspect and all its files atomically. */
+export async function commitImportedAspect(aspectRecord, knowledgeFiles) {
+    if (!aspectRecord || typeof aspectRecord.id !== 'string' || !aspectRecord.id) {
+        throw new TypeError('Invalid imported Aspect record');
+    }
+    if (!Array.isArray(knowledgeFiles)) throw new TypeError('Invalid imported knowledge files');
+    const names = new Set();
+    for (const file of knowledgeFiles) {
+        if (!file || typeof file.name !== 'string' || !file.name || typeof file.text !== 'string' || names.has(file.name)) {
+            throw new TypeError('Invalid or duplicate imported knowledge file');
+        }
+        names.add(file.name);
+    }
+    await initCache();
+    const tx = await createTransaction(['aspects', 'files'], 'readwrite');
+    return new Promise((resolve, reject) => {
+        tx.onabort = () => reject(tx.error || new Error('Aspect import transaction aborted'));
+        tx.onerror = e => reject(e.target.error || tx.error || new Error('Aspect import write failed'));
+        tx.oncomplete = () => {
+            knowledgeCache[aspectRecord.id] = knowledgeFiles.map(({ name, text }) => ({ aspectId: aspectRecord.id, name, text }));
+            resolve();
+        };
+        try {
+            tx.objectStore('aspects').add(aspectRecord);
+            for (const { name, text } of knowledgeFiles) {
+                tx.objectStore('files').put({ aspectId: aspectRecord.id, name, text });
+            }
+        } catch (error) {
+            tx.abort();
+            reject(error);
+        }
+    });
+}
+
 export async function getKnowledgeFilesRaw(aspectId) {
     if (!aspectId) return [];
     await initCache();
@@ -218,10 +258,12 @@ export async function getKnowledgeFilesText(aspectId) {
 
 
 export async function uploadKnowledgeFiles(event) {
+    if (state.libraryBusy) return;
     const files = event?.target?.files;
     if (!files || files.length === 0) return;
     const aspect = getCurrentAspect();
     if (!aspect) return;
+    const wasOwned = state.aspects.includes(aspect);
 
     // Accumulate successfully processed entries so they can be written in a
     // single batched IndexedDB transaction (F-03), eliminating per-chunk
@@ -282,6 +324,11 @@ export async function uploadKnowledgeFiles(event) {
     }
 
     // Persist all successfully extracted files in one transaction.
+    if (state.libraryBusy || (wasOwned && !state.aspects.includes(aspect))) {
+        window.showToast('The library changed while reading these files. Attach them again after the current operation finishes.', 'warning');
+        if (event.target) event.target.value = '';
+        return;
+    }
     if (batchEntries.length > 0) {
         try {
             await saveKnowledgeFileBatch(batchEntries);
@@ -313,9 +360,8 @@ export async function uploadKnowledgeFiles(event) {
 export async function deleteKnowledgeFile(aspectId, name) {
     if (!aspectId || !name) return;
     await initCache();
-    const db = await getDB();
+    const tx = await createTransaction(['files', 'vectors'], 'readwrite');
     return new Promise((resolve, reject) => {
-        const tx = db.transaction(['files', 'vectors'], 'readwrite');
         tx.objectStore('files').delete([aspectId, name]);
         const vectors = tx.objectStore('vectors');
         vectors.index('aspectId').openCursor(IDBKeyRange.only(aspectId)).onsuccess = (e) => {
@@ -331,14 +377,14 @@ export async function deleteKnowledgeFile(aspectId, name) {
             resolve();
         };
         tx.onerror = (e) => reject(e.target.error);
+        tx.onabort = () => reject(tx.error || new Error('Knowledge file deletion aborted'));
     });
 }
 
 export async function deleteAspectData(aspectId) {
     if (!aspectId) return;
-    const db = await getDB();
+    const tx = await createTransaction(['files', 'memory', 'vectors'], 'readwrite');
     return new Promise((resolve, reject) => {
-        const tx = db.transaction(['files', 'memory', 'vectors'], 'readwrite');
         tx.objectStore('vectors').index('aspectId').openCursor(IDBKeyRange.only(aspectId)).onsuccess = (e) => {
             const cursor = e.target.result;
             if (!cursor) return;
@@ -371,5 +417,6 @@ export async function deleteAspectData(aspectId) {
             resolve();
         };
         tx.onerror = (e) => reject(e.target.error);
+        tx.onabort = () => reject(tx.error || new Error('Aspect data deletion aborted'));
     });
 }

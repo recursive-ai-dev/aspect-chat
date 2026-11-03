@@ -1,5 +1,6 @@
 import { scheduleSave, flushSave } from './persist.js';
 import { readStoredTheme } from './themes.js';
+import { normalizeNumericSetting } from './numericSettings.js';
 
 /** Generation defaults applied when an Aspect does not override them. */
 export const DEFAULT_PARAMS = {
@@ -8,11 +9,12 @@ export const DEFAULT_PARAMS = {
     topP: 1
 };
 
-function readStoredKey() {
+function readStoredKey(key) {
     if (typeof localStorage === 'undefined') return '';
     // Prefer the durable copy; fall back to a session-scoped one so a user who
     // turned "remember" off mid-session is not logged out of their own tab.
-    return localStorage.getItem('apiKey') || sessionStorage.getItem('apiKey') || '';
+    try { return localStorage.getItem(key) || sessionStorage.getItem(key) || ''; }
+    catch { return ''; }
 }
 
 function readBool(key, fallback) {
@@ -24,14 +26,13 @@ function readBool(key, fallback) {
 
 function readNumber(key, fallback) {
     if (typeof localStorage === 'undefined') return fallback;
-    const value = parseFloat(localStorage.getItem(key));
-    return Number.isFinite(value) ? value : fallback;
+    return normalizeNumericSetting(key, localStorage.getItem(key));
 }
 
 export let state = {
     settings: {
         apiUrl: (typeof localStorage !== 'undefined' && localStorage.getItem('apiUrl')) || '',
-        apiKey: readStoredKey(),
+        apiKey: readStoredKey('apiKey'),
         model: (typeof localStorage !== 'undefined' && localStorage.getItem('model')) || '',
         provider: (typeof localStorage !== 'undefined' && localStorage.getItem('provider')) || 'custom',
         maxContext: readNumber('maxContext', 20),
@@ -45,7 +46,7 @@ export let state = {
         // Optional secondary provider, used when the primary one fails.
         fallbackProvider: (typeof localStorage !== 'undefined' && localStorage.getItem('fallbackProvider')) || '',
         fallbackUrl: (typeof localStorage !== 'undefined' && localStorage.getItem('fallbackUrl')) || '',
-        fallbackKey: (typeof localStorage !== 'undefined' && localStorage.getItem('fallbackKey')) || '',
+        fallbackKey: readStoredKey('fallbackKey'),
         fallbackModel: (typeof localStorage !== 'undefined' && localStorage.getItem('fallbackModel')) || '',
 
         toolTimeoutMs: readNumber('toolTimeoutMs', 30000),
@@ -66,6 +67,7 @@ export let state = {
     consecutiveToolRuns: 0,
     abortController: null,
     isGenerating: false,
+    libraryBusy: false,
     // Depth of the (possibly self-recursive, via the agentic tool loop)
     // generation call stack. Teardown only happens when it returns to 0.
     generationDepth: 0

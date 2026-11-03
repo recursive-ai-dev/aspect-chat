@@ -186,6 +186,7 @@ function hydrateBasicControls(aspect) {
 }
 
 export function toggleAdvancedMode() {
+    if (state.libraryBusy) return;
     const toggle = document.getElementById('advanced-mode-toggle');
     const slider = document.getElementById('advanced-mode-slider');
     const basicArea = document.getElementById('basic-config-area');
@@ -230,6 +231,7 @@ export function toggleAdvancedMode() {
 }
 
 export function updateBasicInstructions() {
+    if (state.libraryBusy) return;
     const descInput = document.getElementById('edit-basic-instructions');
     const toneInput = document.getElementById('edit-basic-tone');
     if (!descInput || !toneInput) return;
@@ -276,6 +278,7 @@ function renderGenerationParams(aspect) {
 }
 
 export function updateGenerationParam(field, rawValue) {
+    if (state.libraryBusy) return;
     const aspect = getCurrentAspect();
     if (!aspect) return;
     if (!aspect.params) aspect.params = {};
@@ -363,6 +366,7 @@ export async function renderKnowledgeFileList() {
         remove.className = 'settings-btn danger-btn knowledge-file-remove';
         remove.innerText = 'Remove';
         remove.onclick = async () => {
+            if (state.libraryBusy || getCurrentAspect() !== aspect) return;
             try {
                 await deleteKnowledgeFile(aspect.id, file.name);
                 showToast(`Removed ${file.name} from knowledge.`);
@@ -474,6 +478,7 @@ export function showEditorView() {
             };
             paintNet();
             netBtn.onclick = () => {
+                if (state.libraryBusy || getCurrentAspect() !== aspect) return;
                 const i = NET_STATES.findIndex(x => x.val === tool.allowNetwork);
                 tool.allowNetwork = NET_STATES[(i + 1) % NET_STATES.length].val;
                 if (tool.allowNetwork === undefined) delete tool.allowNetwork;
@@ -491,6 +496,7 @@ export function showEditorView() {
             delBtn.innerText = '🗑️ Delete';
             delBtn.className = 'settings-btn danger-btn';
             delBtn.onclick = () => {
+                if (state.libraryBusy || getCurrentAspect() !== aspect) return;
                 if (!window.confirm(`Delete the tool "${tool.name}"? This cannot be undone.`)) return;
                 aspect.tools.splice(index, 1);
                 markChangesUnsaved();
@@ -651,7 +657,7 @@ export function renderConversationList() {
 export function newConversation() {
     const aspect = getCurrentAspect();
     if (!aspect) return;
-    if (state.isGenerating) {
+    if (state.isGenerating || state.libraryBusy) {
         showToast('Wait for the current response to finish first.', 'error');
         return;
     }
@@ -666,7 +672,7 @@ export function newConversation() {
 export function selectConversation(conversationId) {
     const aspect = getCurrentAspect();
     if (!aspect) return;
-    if (state.isGenerating) {
+    if (state.isGenerating || state.libraryBusy) {
         showToast('Wait for the current response to finish first.', 'error');
         return;
     }
@@ -677,6 +683,7 @@ export function selectConversation(conversationId) {
 }
 
 export function promptRenameConversation(conversationId) {
+    if (state.libraryBusy) return;
     const aspect = getCurrentAspect();
     if (!aspect) return;
     const conv = aspect.conversations.find(c => c.id === conversationId);
@@ -692,7 +699,7 @@ export function promptRenameConversation(conversationId) {
 export function confirmDeleteConversation(conversationId) {
     const aspect = getCurrentAspect();
     if (!aspect) return;
-    if (state.isGenerating) {
+    if (state.isGenerating || state.libraryBusy) {
         showToast('Wait for the current response to finish first.', 'error');
         return;
     }
@@ -715,11 +722,14 @@ export function confirmDeleteConversation(conversationId) {
  * ------------------------------------------------------------------ */
 
 export function uploadIcon(event) {
+    if (state.libraryBusy) return;
+    const owner = getCurrentAspect();
     const file = event.target.files[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (e) => {
-        const aspect = getCurrentAspect();
+        if (state.libraryBusy || getCurrentAspect() !== owner) return;
+        const aspect = owner;
         if (aspect) {
             aspect.icon = e.target.result;
             document.getElementById('icon-preview').src = e.target.result;
@@ -740,6 +750,7 @@ let iconGenBusy = false;
  * Each click uses a fresh random seed, so re-clicking gives a new take.
  */
 export async function generateAspectIcon() {
+    if (state.libraryBusy) return;
     if (iconGenBusy) return;
     const aspect = getCurrentAspect();
     if (!aspect) return;
@@ -757,6 +768,7 @@ export async function generateAspectIcon() {
 
     try {
         const dataUri = await generateIcon(description);
+        if (state.libraryBusy || getCurrentAspect() !== aspect) return;
         aspect.icon = dataUri;
         const preview = document.getElementById('icon-preview');
         if (preview) preview.src = dataUri;
@@ -774,6 +786,7 @@ export async function generateAspectIcon() {
 }
 
 export function uploadTools(event) {
+    if (state.libraryBusy) return;
     const files = Array.from(event.target.files);
     const aspect = getCurrentAspect();
     if (!aspect) return;
@@ -790,6 +803,7 @@ export function uploadTools(event) {
     files.forEach(file => {
         const reader = new FileReader();
         reader.onload = (e) => {
+            if (state.libraryBusy || getCurrentAspect() !== aspect) return;
             const existingIdx = aspect.tools.findIndex(t => t.name === file.name);
             if (existingIdx !== -1) {
                 aspect.tools[existingIdx].code = e.target.result;
@@ -841,6 +855,7 @@ export function openSystemToolsModal() {
 }
 
 export function addSystemTool(systemTool) {
+    if (state.libraryBusy) return;
     const aspect = getCurrentAspect();
     if (!aspect) return;
     if (!aspect.tools) aspect.tools = [];
@@ -921,6 +936,7 @@ export function renderPresetBgGrid() {
 }
 
 export function selectPresetBackground(path) {
+    if (state.libraryBusy) return;
     const aspect = getCurrentAspect();
     if (!aspect) return;
     aspect.background = path;
@@ -932,11 +948,14 @@ export function selectPresetBackground(path) {
 }
 
 export function uploadBackground(event) {
+    if (state.libraryBusy) return;
+    const owner = getCurrentAspect();
     const file = event.target.files[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (e) => {
-        const aspect = getCurrentAspect();
+        if (state.libraryBusy || getCurrentAspect() !== owner) return;
+        const aspect = owner;
         if (aspect) {
             aspect.background = e.target.result;
             document.getElementById('bg-filename').innerText = `Custom: ${file.name}`;

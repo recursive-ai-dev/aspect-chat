@@ -1,6 +1,7 @@
 import { getCurrentAspect } from './aspects.js';
 import { updateAspectData, sanitizeToolName, RESERVED_TOOL_NAMES, hashToolCode } from './aspects.js';
 import { markChangesUnsaved, showToast } from './ui.js';
+import { state } from './state.js';
 
 let nodes = [];
 let connections = [];
@@ -278,6 +279,7 @@ export function compileWorkflow(nodesList, connectionsList, configGetter) {
 }
 
 export function saveWorkflowAsTool() {
+    if (state.libraryBusy) return;
     const nameInput = document.getElementById('workflow-name-input')?.value?.trim() || '';
     if (!nameInput) {
         showToast("Please enter a tool name.", "error");

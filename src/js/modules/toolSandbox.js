@@ -24,17 +24,14 @@ const CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'none'; c
 
 /** Bootstrap that runs inside the sandbox. `__CHANNEL__` is substituted per run. */
 
-function buildSrcdoc(channel, toolCode) {
+function buildSrcdoc(channel) {
     const boot = `(${sandboxBootstrap.toString().replace('__CHANNEL__', channel)})();`;
-    // The tool runs as a normal inline script (no eval under this CSP). Neutralise
-    // any literal `</script` so hostile code can't close the tag early; `<\/script`
-    // parses identically to `</script` everywhere it could legally appear in JS.
-    const safeTool = String(toolCode == null ? '' : toolCode).replace(/<\/(script)/gi, '<\\/$1');
+    // Tool code arrives only after bootstrap has checked frame isolation.
+    // A second script tag would still run if bootstrap refused initialization.
     return `<!DOCTYPE html><html><head>` +
         `<meta http-equiv="Content-Security-Policy" content="${CSP}">` +
         `</head><body>` +
         `<script>${boot}<\/script>` +
-        `<script>\n${safeTool}\n<\/script>` +
         `</body></html>`;
 }
 
@@ -133,7 +130,7 @@ function runToolInFrame(opts) {
             if (settled || !d || d.channel !== channel || (e.source && e.source !== iframe?.contentWindow)) return;
 
             if (d.type === 'ready') {
-                post({ type: 'init', args, state, memory: memory || {}, ...(_releaseFrame ? { code } : {}) });
+                post({ type: 'init', args, state, memory: memory || {}, code });
                 return;
             }
             if (d.type === 'done') {

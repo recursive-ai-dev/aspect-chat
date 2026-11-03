@@ -1,13 +1,19 @@
 import { showChatView, applyAspectBackground } from './ui.js';
-import { renderAspectList } from './aspects.js';
-import { getCurrentAspect } from './aspects.js';
-import { markChangesSaved } from './state.js';
-import { state } from './state.js';
-import { getKnowledgeFilesRaw, saveKnowledgeFile } from './db.js';
-import { normalizeAspect, sanitizeToolName, RESERVED_TOOL_NAMES } from './aspects.js';
+import { renderAspectList, getCurrentAspect, normalizeAspect, sanitizeToolName, RESERVED_TOOL_NAMES } from './aspects.js';
+import { markChangesSaved, flushAspects, state } from './state.js';
+import { getKnowledgeFilesRaw, commitImportedAspect } from './db.js';
+import { saveBlob } from './download.js';
+import { readBoundedArchive } from './archive.js';
+import { addDataImage, addPresetBackground, readArchiveImage } from './archiveImages.js';
+import { serializeAspect, isPersistReady } from './persist.js';
+import { durableMemory } from './memory.js';
 import { newId } from './conversations.js';
 
 export const MAX_ASPECT_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
+
+function exportStem(name) {
+    return (String(name || 'Aspect').replace(/[^a-zA-Z0-9]/g, '_').slice(0, 160) || 'Aspect');
+}
 
 /**
  * Make imported tool filenames safe and non-deceptive: sanitised charset, no
@@ -40,371 +46,243 @@ function loadJSZip() {
     return jszipPromise;
 }
 
-        export async function saveAspectToFile() {
-            const aspect = getCurrentAspect();
-            if (!aspect) return;
+export async function saveAspectToFile() {
+    const aspect = getCurrentAspect();
+    if (!aspect) return;
 
-            const JSZip = await loadJSZip();
-            const zip = new JSZip();
-            
-            zip.file("Name.md", aspect.name);
-            zip.file("Description.md", aspect.description);
-            zip.file("Instructions.md", aspect.instructions);
-            zip.file("Knowledge/KnowledgeFile.md", aspect.knowledge || "");
-            
-            if (aspect.icon) {
-                const matches = aspect.icon.match(/^data:(image\/[a-z+]+);base64,(.+)$/);
-                if (matches) {
-                    const base64Data = matches[2];
-                    zip.file("Icon.png", base64Data, {base64: true});
-                } else {
-                    zip.file("Icon.png", aspect.icon);
-                }
-            }
+    try {
+        const JSZip = await loadJSZip();
+        const zip = new JSZip();
 
-            if (aspect.background) {
-                if (aspect.background.startsWith('data:')) {
-                    const matches = aspect.background.match(/^data:(image\/[a-z+]+);base64,(.+)$/);
-                    if (matches) {
-                        const base64Data = matches[2];
-                        zip.file("Background.jpeg", base64Data, {base64: true});
-                    }
-                } else {
-                    try {
-                        const response = await fetch(`./${aspect.background}`).catch(() => null);
-                        if (response && response.ok) {
-                            const blob = await response.blob();
-                            zip.file("Background.jpeg", blob);
-                        }
-                    } catch (err) {
-                        console.error("Failed to fetch preset background for zip packing", err);
-                    }
-                }
-            }
+        zip.file("Name.md", aspect.name);
+        zip.file("Description.md", aspect.description);
+        zip.file("Instructions.md", aspect.instructions);
+        zip.file("Knowledge/KnowledgeFile.md", aspect.knowledge || "");
 
-            const toolsFolder = zip.folder("Tools");
-            if (aspect.tools) {
-                const toolsState = {};
-                aspect.tools.forEach(tool => {
-                    toolsFolder.file(tool.name, tool.code);
-                    if (tool.state) toolsState[tool.name] = tool.state;
-                });
-                if (Object.keys(toolsState).length > 0) {
-                    toolsFolder.file("state.json", JSON.stringify(toolsState, null, 2));
-                }
-            }
+        if (aspect.icon) addDataImage(zip, 'Icon', aspect.icon);
+        if (aspect.background) {
+            if (aspect.background.startsWith('data:')) addDataImage(zip, 'Background', aspect.background);
+            else await addPresetBackground(zip, aspect.background);
+        }
 
-            // Chat history is written twice, on purpose:
-            //
-            //  - conversations.json is the lossless record. It round-trips every
-            //    conversation with its title, timestamps and exact message text.
-            //  - ChatHistory/History.md is the human-readable transcript of the
-            //    active conversation, and is what older builds of Aspect Studio
-            //    (and the documented .aspect layout) know how to read.
-            //
-            // Import prefers the JSON and falls back to the Markdown, so files
-            // move in both directions without losing anything.
-            const conversations = (aspect.conversations || []).map(conv => ({
-                id: conv.id,
-                title: conv.title,
-                titleLocked: !!conv.titleLocked,
-                createdAt: conv.createdAt,
-                updatedAt: conv.updatedAt,
-                messages: (conv.messages || [])
-                    .filter(m => m.role === 'user' || m.role === 'assistant')
-                    .map(m => ({ role: m.role, content: m.content }))
-            }));
-            zip.file("ChatHistory/conversations.json", JSON.stringify({
-                version: 2,
-                activeConversationId: aspect.activeConversationId,
-                conversations
-            }, null, 2));
-
-            let historyMd = "";
-            aspect.chatHistory.forEach(msg => {
-                if (msg.role === 'user' || msg.role === 'assistant') {
-                    historyMd += `### ${msg.role === 'user' ? 'User' : aspect.name}\n${msg.content}\n\n`;
-                }
+        const toolsFolder = zip.folder("Tools");
+        if (aspect.tools) {
+            const toolsState = {};
+            aspect.tools.forEach(tool => {
+                toolsFolder.file(tool.name, tool.code);
+                if (tool.state) toolsState[tool.name] = tool.state;
             });
-            zip.file("ChatHistory/History.md", historyMd);
-
-            // Generation settings and editor mode travel with the Aspect so an
-            // imported one behaves exactly as it did for its author.
-            zip.file("config.json", JSON.stringify({
-                params: aspect.params || {},
-                basicMode: aspect.basicMode,
-                basicDescription: aspect.basicDescription,
-                basicTone: aspect.basicTone
-            }, null, 2));
-
-            // Export raw knowledge files from IndexedDB
-            const rawKnowledgeFiles = await getKnowledgeFilesRaw(aspect.id);
-            zip.file("memory.json", JSON.stringify(aspect.memory || {}, null, 2));
-
-            if (rawKnowledgeFiles && rawKnowledgeFiles.length > 0) {
-                const knowledgeFolder = zip.folder("Knowledge/Files");
-                rawKnowledgeFiles.forEach(f => {
-                    knowledgeFolder.file(f.name, f.text);
-                });
+            if (Object.keys(toolsState).length > 0) {
+                toolsFolder.file("state.json", JSON.stringify(toolsState, null, 2));
             }
+        }
 
-            const blob = await zip.generateAsync({type: "blob"});
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `${aspect.name.replace(/[^a-zA-Z0-9]/g, '_')}.aspect`;
-            a.click();
-            URL.revokeObjectURL(url);
-            
+        // Chat history is written twice, on purpose:
+        //
+        //  - conversations.json is the lossless record. It round-trips every
+        //    conversation with its title, timestamps and exact message text.
+        //  - ChatHistory/History.md is the human-readable transcript of the
+        //    active conversation, and is what older builds of Aspect Studio
+        //    (and the documented .aspect layout) know how to read.
+        //
+        // Import prefers the JSON and falls back to the Markdown, so files
+        // move in both directions without losing anything.
+        const conversations = (aspect.conversations || []).map(conv => ({
+            id: conv.id,
+            title: conv.title,
+            titleLocked: !!conv.titleLocked,
+            createdAt: conv.createdAt,
+            updatedAt: conv.updatedAt,
+            messages: (conv.messages || [])
+                .filter(m => m.role === 'user' || m.role === 'assistant')
+                .map(m => ({ role: m.role, content: m.content }))
+        }));
+        zip.file("ChatHistory/conversations.json", JSON.stringify({
+            version: 2,
+            activeConversationId: aspect.activeConversationId,
+            conversations
+        }, null, 2));
+
+        let historyMd = "";
+        aspect.chatHistory.forEach(msg => {
+            if (msg.role === 'user' || msg.role === 'assistant') {
+                historyMd += `### ${msg.role === 'user' ? 'User' : aspect.name}\n${msg.content}\n\n`;
+            }
+        });
+        zip.file("ChatHistory/History.md", historyMd);
+
+        // Generation settings and editor mode travel with the Aspect so an
+        // imported one behaves exactly as it did for its author.
+        zip.file("config.json", JSON.stringify({
+            params: aspect.params || {},
+            basicMode: aspect.basicMode,
+            basicDescription: aspect.basicDescription,
+            basicTone: aspect.basicTone
+        }, null, 2));
+
+        // Export raw knowledge files from IndexedDB
+        const rawKnowledgeFiles = await getKnowledgeFilesRaw(aspect.id);
+        zip.file("memory.json", JSON.stringify(durableMemory(aspect.memory), null, 2));
+
+        if (rawKnowledgeFiles && rawKnowledgeFiles.length > 0) {
+            const knowledgeFolder = zip.folder("Knowledge/Files");
+            rawKnowledgeFiles.forEach(f => {
+                knowledgeFolder.file(f.name, f.text);
+            });
+        }
+
+        const blob = await zip.generateAsync({type: "blob"});
+        if (await saveBlob(blob, `${exportStem(aspect.name)}.aspect`, 'application/zip')) {
             markChangesSaved();
         }
+    } catch (error) {
+        window.showToast(`Could not export Aspect: ${error.message}`, 'error');
+    }
+}
 
-        export async function loadAspectFile(event) {
-            const file = event?.target?.files?.[0];
-            if (!file) return;
-
-            if (Number.isFinite(file.size) && file.size > MAX_ASPECT_FILE_SIZE) {
-                window.showToast('Aspect file exceeds the 50MB size limit.', 'error');
-                if (event.target) event.target.value = '';
-                return;
+export async function loadAspectFile(event) {
+    const file = event?.target?.files?.[0];
+    if (!file) return;
+    if (state.isGenerating || state.libraryBusy) {
+        window.showToast('Stop generation or wait for the current library operation before importing.', 'error');
+        if (event.target) event.target.value = '';
+        return;
+    }
+    state.libraryBusy = true;
+    let committed = false;
+    try {
+        if (!isPersistReady()) throw new Error('Storage recovery is read-only. Reload before importing.');
+        if (Number.isFinite(file.size) && file.size > MAX_ASPECT_FILE_SIZE) {
+            window.showToast('Aspect file exceeds the 50MB size limit.', 'error');
+            return;
+        }
+        const JSZip = await loadJSZip();
+        const archive = await readBoundedArchive(await JSZip.loadAsync(file));
+        const name = archive.text('Name.md')?.trim() || 'Imported Aspect';
+        const desc = archive.text('Description.md')?.trim() || '';
+        const instr = archive.text('Instructions.md')?.trim() || '';
+        const knowledge = archive.text('Knowledge/KnowledgeFile.md') || '';
+        const icon = readArchiveImage(archive, 'Icon');
+        const background = readArchiveImage(archive, 'Background');
+        const json = (path, fallback, label) => {
+            if (!archive.has(path)) return fallback;
+            try { return JSON.parse(archive.text(path)); }
+            catch (error) {
+                console.error(`Failed to parse ${label} during aspect import`, error.message);
+                return fallback;
             }
-
-            try {
-                const JSZip = await loadJSZip();
-                const zip = await JSZip.loadAsync(file);
-                
-                const nameFile = zip.file("Name.md");
-                const descFile = zip.file("Description.md");
-                const instrFile = zip.file("Instructions.md");
-                
-                // Removed strict validation to allow graceful degradation when files are missing or malformed
-
-                const name = nameFile ? (await nameFile.async("string")).trim() : "Imported Aspect";
-                const desc = descFile ? (await descFile.async("string")).trim() : "";
-                const instr = instrFile ? (await instrFile.async("string")).trim() : "";
-                
-                const knowledgeFile = zip.file("Knowledge/KnowledgeFile.md");
-                const knowledge = knowledgeFile ? await knowledgeFile.async("string") : "";
-                
-                let icon = "";
-                if (zip.file("Icon.png")) {
-                    const imgData = await zip.file("Icon.png").async("base64");
-                    icon = `data:image/png;base64,${imgData}`;
-                } else if (zip.file("Icon.b64")) {
-                    const b64 = await zip.file("Icon.b64").async("string");
-                    icon = `data:image/png;base64,${b64}`;
-                }
-
-                let background = "";
-                for (const candidate of ["Background.jpeg", "Background.jpg", "Background.png", "Background.webp"]) {
-                    const entry = zip.file(candidate);
-                    if (entry) {
-                        const imgData = await entry.async("base64");
-                        const ext = candidate.split('.').pop().toLowerCase();
-                        const mime = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
-                        background = `data:${mime};base64,${imgData}`;
-                        break;
-                    }
-                }
-
-                const tools = [];
-                const toolsFolder = zip.folder("Tools");
-                if (toolsFolder) {
-                    const promises = [];
-                    let toolsState = {};
-                    
-                    if (toolsFolder.file("state.json")) {
-                        const stateJsonStr = await toolsFolder.file("state.json").async("string");
-                        try {
-                            toolsState = JSON.parse(stateJsonStr);
-                        } catch (e) {
-                            console.error("Failed to parse tool state.json during aspect import", e.message);
-                        }
-                    }
-
-                    Object.keys(toolsFolder.files).forEach(path => {
-                        if (path.endsWith(".js") && !toolsFolder.files[path].dir) {
-                            const p = toolsFolder.files[path].async("string").then(code => {
-                                const toolName = path.replace(/\\/g, '/').split('/').pop();
-                                tools.push({
-                                    // name is re-resolved after all tools load
-                                    // (see resolveImportedToolNames)
-                                    name: toolName,
-                                    code,
-                                    state: toolsState[toolName] || {}
-                                });
-                            });
-                            promises.push(p);
-                        }
-                    });
-                    await Promise.all(promises);
-                    resolveImportedToolNames(tools);
-                }
-
-                let memory = {};
-                if (zip.file("memory.json")) {
-                    const memoryStr = await zip.file("memory.json").async("string");
-                    try {
-                        memory = JSON.parse(memoryStr);
-                    } catch (e) {
-                        console.error("Failed to parse memory.json during aspect import", e.message);
-                    }
-                }
-
-                // Prefer the lossless conversation record; fall back to the
-                // Markdown transcript for files written before it existed.
-                let conversations = null;
-                let activeConversationId = null;
-                const conversationsEntry = zip.file("ChatHistory/conversations.json");
-                if (conversationsEntry) {
-                    try {
-                        const parsed = JSON.parse(await conversationsEntry.async("string"));
-                        if (Array.isArray(parsed?.conversations) && parsed.conversations.length > 0) {
-                            conversations = parsed.conversations.map(conv => ({
-                                // Re-key on import so importing the same file
-                                // twice cannot collide with the existing copy.
-                                id: newId('conv'),
-                                originalId: conv.id,
-                                title: conv.title || 'Imported chat',
-                                titleLocked: !!conv.titleLocked,
-                                createdAt: conv.createdAt || Date.now(),
-                                updatedAt: conv.updatedAt || conv.createdAt || Date.now(),
-                                messages: Array.isArray(conv.messages)
-                                    ? conv.messages
-                                        .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
-                                        .map(m => ({ role: m.role, content: m.content }))
-                                    : []
-                            }));
-                            const match = conversations.find(c => c.originalId === parsed.activeConversationId);
-                            activeConversationId = (match || conversations[0]).id;
-                            conversations.forEach(c => { delete c.originalId; });
-                        }
-                    } catch (e) {
-                        console.error("Failed to parse conversations.json during aspect import", e.message);
-                    }
-                }
-
-                const chatHistory = [];
-                if (!conversations && zip.file("ChatHistory/History.md")) {
-                    const histMd = await zip.file("ChatHistory/History.md").async("string");
-                    const blocks = histMd.split('### ').slice(1);
-                    blocks.forEach(block => {
-                        const lines = block.split('\n');
-                        const header = lines[0].trim();
-                        const role = header === 'User' ? 'user' : 'assistant';
-                        const content = lines.slice(1).join('\n').trim();
-                        if (content) {
-                            chatHistory.push({ role, content });
-                        }
-                    });
-                }
-
-                let config = {};
-                if (zip.file("config.json")) {
-                    try {
-                        config = JSON.parse(await zip.file("config.json").async("string")) || {};
-                    } catch (e) {
-                        console.error("Failed to parse config.json during aspect import", e.message);
-                    }
-                }
-
-                const newAspect = normalizeAspect({
-                    id: newId('aspect'),
-                    name,
-                    description: desc,
-                    instructions: instr,
-                    knowledge,
-                    icon,
-                    background,
-                    tools,
-                    // Imported tool code is arbitrary JavaScript the user has
-                    // not seen. It stays inert until reviewed in the editor.
-                    toolsReviewed: tools.length === 0,
-                    memory,
-                    params: config.params || {},
-                    basicMode: config.basicMode,
-                    basicDescription: config.basicDescription,
-                    basicTone: config.basicTone,
-                    ...(conversations
-                        ? { conversations, activeConversationId }
-                        : { chatHistory })
-                });
-
-                state.aspects.push(newAspect);
-                state.currentAspectId = newAspect.id;
-                try {
-                    localStorage.setItem('currentAspectId', newAspect.id);
-                } catch { /* storage full / blocked */ }
-                applyAspectBackground();
-                
-                // Import raw knowledge files to IndexedDB
-                const knowledgeFilesFolder = zip.folder("Knowledge/Files");
-                if (knowledgeFilesFolder) {
-                    const promises = [];
-                    for (let relativePath in knowledgeFilesFolder.files) {
-                        const zipEntry = knowledgeFilesFolder.files[relativePath];
-                        if (!zipEntry.dir) {
-                            promises.push(
-                                zipEntry.async('string').then(fileText => {
-                                    // Extract just the filename from relative path (if nested, we flatten for IndexedDB)
-                                    const normalizedPath = relativePath.replace(/\\/g, '/');
-                                    const fileName = normalizedPath.split('/').pop() || normalizedPath;
-                                    return saveKnowledgeFile(newAspect.id, fileName, fileText);
-                                })
-                            );
-                        }
-                    }
-                    await Promise.all(promises);
-                }
-
-                renderAspectList();
-                showChatView();
-                markChangesSaved();
-
-                if (newAspect.toolsReviewed === false) {
-                    window.showToast(
-                        `Imported "${name}" with ${tools.length} tool(s) left DISABLED. ` +
-                        `Open the editor, review the tool code, then enable them.`,
-                        'error'
-                    );
-                }
-
-            } catch (err) {
-                console.error("Error loading .aspect file", err);
-                window.showToast(`Error loading .aspect file: ${err.message}`, "error");
-            } finally {
-                event.target.value = '';
+        };
+        const toolsState = json('Tools/state.json', {}, 'tool state.json') || {};
+        const tools = archive.paths.filter(path => path.startsWith('Tools/') && path.endsWith('.js')).map(path => {
+            const toolName = path.split('/').pop();
+            return { name: toolName, code: archive.text(path), state: Object.hasOwn(toolsState, toolName) ? toolsState[toolName] : {} };
+        });
+        resolveImportedToolNames(tools);
+        const memory = durableMemory(json('memory.json', {}, 'memory.json'));
+        const parsed = json('ChatHistory/conversations.json', null, 'conversations.json');
+        let conversations = null;
+        let activeConversationId = null;
+        if (Array.isArray(parsed?.conversations) && parsed.conversations.length > 0) {
+            conversations = parsed.conversations.filter(conv => conv && typeof conv === 'object').map(conv => ({
+                id: newId('conv'), originalId: conv.id,
+                title: typeof conv.title === 'string' ? conv.title : 'Imported chat',
+                titleLocked: !!conv.titleLocked,
+                createdAt: Number.isFinite(conv.createdAt) ? conv.createdAt : Date.now(),
+                updatedAt: Number.isFinite(conv.updatedAt) ? conv.updatedAt : Date.now(),
+                messages: Array.isArray(conv.messages) ? conv.messages
+                    .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+                    .map(m => ({ role: m.role, content: m.content })) : []
+            }));
+            if (conversations.length) {
+                activeConversationId = (conversations.find(c => c.originalId === parsed.activeConversationId) || conversations[0]).id;
+                conversations.forEach(c => { delete c.originalId; });
+            } else conversations = null;
+        }
+        const chatHistory = [];
+        if (!conversations && archive.has('ChatHistory/History.md')) {
+            for (const block of archive.text('ChatHistory/History.md').split('### ').slice(1)) {
+                const lines = block.split('\n');
+                const header = lines[0].trim();
+                const content = lines.slice(1).join('\n').trim();
+                if (content) chatHistory.push({ role: header === 'User' ? 'user' : 'assistant', content });
             }
         }
-
-        // Full HTML-entity escape, safe for both text and double-quoted
-        // attribute contexts.
-        function esc(value) {
-            return String(value == null ? '' : value)
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#039;');
+        const config = json('config.json', {}, 'config.json') || {};
+        const newAspect = normalizeAspect({
+            id: newId('aspect'), name, description: desc, instructions: instr, knowledge,
+            icon, background, tools, toolsReviewed: tools.length === 0, memory,
+            params: config.params || {}, basicMode: config.basicMode,
+            basicDescription: config.basicDescription, basicTone: config.basicTone,
+            ...(conversations ? { conversations, activeConversationId } : { chatHistory })
+        });
+        const knowledgeFiles = [];
+        const names = new Set();
+        for (const path of archive.paths.filter(path => path.startsWith('Knowledge/Files/'))) {
+            const fileName = path.split('/').pop();
+            if (names.has(fileName)) throw new Error('Knowledge files contain duplicate filenames.');
+            names.add(fileName);
+            knowledgeFiles.push({ name: fileName, text: archive.text(path) });
         }
-
-        // Only allow an icon the exported page can safely render as an image.
-        function safeIconSrc(icon) {
-            if (typeof icon !== 'string') return '';
-            return /^data:image\/[a-z+.-]+;base64,[A-Za-z0-9+/=\s]+$/i.test(icon) ? icon : '';
+        // A pending whole-library save must commit first, or it could
+        // delete the newly imported row using the older in-memory list.
+        await flushAspects();
+        if (state.isGenerating) throw new Error('Stop generation before importing an Aspect.');
+        if (!isPersistReady()) throw new Error('Storage recovery is read-only. Reload before importing.');
+        await commitImportedAspect(serializeAspect(newAspect), knowledgeFiles);
+        committed = true;
+        state.aspects.push(newAspect);
+        // Generation may begin while the transaction commits. Publish
+        // the imported library row without changing its active context.
+        if (!state.isGenerating) {
+            state.currentAspectId = newAspect.id;
+            try { localStorage.setItem('currentAspectId', newAspect.id); } catch { /* Storage blocked/full. */ }
+            applyAspectBackground();
+            showChatView();
         }
+        renderAspectList();
+        markChangesSaved();
+        if (newAspect.toolsReviewed === false) {
+            window.showToast(`Imported "${name}" with ${tools.length} tool(s) left DISABLED. Open the editor, review the tool code, then enable them.`, 'error');
+        }
+    } catch (err) {
+        console.error(committed ? 'Imported Aspect saved but view refresh failed' : 'Error loading .aspect file', err);
+        window.showToast(committed
+            ? 'The imported Aspect was saved, but the view could not refresh. Reload to display it.'
+            : `Error loading .aspect file: ${err.message}`, 'error');
+    } finally {
+        state.libraryBusy = false;
+        if (event.target) event.target.value = '';
+    }
+}
 
-        export async function exportAspectToWebpage() {
-            const aspect = getCurrentAspect();
-            if (!aspect) return;
+// Full HTML-entity escape, safe for both text and double-quoted
+// attribute contexts.
+function esc(value) {
+    return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
 
-            const safeName = esc(aspect.name);
-            const safeDesc = esc(aspect.description);
-            const safeInstructions = esc(aspect.instructions);
-            const safeIcon = esc(safeIconSrc(aspect.icon));
-            const iconHtml = safeIcon ? `<img class="icon" src="${safeIcon}" alt="Aspect Icon">\n        ` : '';
+// Only allow an icon the exported page can safely render as an image.
+function safeIconSrc(icon) {
+    if (typeof icon !== 'string') return '';
+    return /^data:image\/[a-z+.-]+;base64,[A-Za-z0-9+/=\s]+$/i.test(icon) ? icon : '';
+}
 
-            const htmlContent = `<!DOCTYPE html>
+export async function exportAspectToWebpage() {
+    const aspect = getCurrentAspect();
+    if (!aspect) return;
+
+    const safeName = esc(aspect.name);
+    const safeDesc = esc(aspect.description);
+    const safeInstructions = esc(aspect.instructions);
+    const safeIcon = esc(safeIconSrc(aspect.icon));
+    const iconHtml = safeIcon ? `<img class="icon" src="${safeIcon}" alt="Aspect Icon">\n        ` : '';
+
+    const htmlContent = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -459,13 +337,12 @@ function loadJSZip() {
 </body>
 </html>`;
 
-            const blob = new Blob([htmlContent], { type: 'text/html' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `${aspect.name.replace(/[^a-zA-Z0-9]/g, '_')}_card.html`;
-            a.click();
-            URL.revokeObjectURL(url);
-            
-            window.showToast("Webpage Exported Successfully!", "success");
+    const blob = new Blob([htmlContent], { type: 'text/html' });
+    try {
+        if (await saveBlob(blob, `${exportStem(aspect.name)}_card.html`, 'text/html')) {
+            window.showToast('Webpage Exported Successfully!', 'success');
         }
+    } catch (error) {
+        window.showToast(`Could not export webpage: ${error.message}`, 'error');
+    }
+}

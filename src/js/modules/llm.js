@@ -134,13 +134,14 @@ export async function readSSEStream(reader, onDelta, onToolCall) {
     // Accumulator for streaming tool_calls fragments (index → entry).
     const toolCallsMap = new Map();
     let dispatched = false;
+    let terminated = false;
 
     const consumeLine = (rawLine) => {
         const line = rawLine.replace(/\r$/, '').trim();
         if (line === '' || !line.startsWith('data:')) return;
 
         const payload = line.slice(5).trim();
-        if (payload === '[DONE]') return;
+        if (payload === '[DONE]') { terminated = true; return; }
 
         let data;
         try {
@@ -184,14 +185,20 @@ export async function readSSEStream(reader, onDelta, onToolCall) {
         pending += decoder.decode(value, { stream: true });
         const lines = pending.split('\n');
         pending = lines.pop();
-        for (const line of lines) consumeLine(line);
+        for (const line of lines) {
+            consumeLine(line);
+            if (terminated) break;
+        }
+        if (terminated) break;
     }
 
     // Flush any bytes the decoder is still holding (a final chunk that ended
     // mid–multibyte sequence, e.g. an emoji as the last token), then the
     // trailing line if it arrived without a newline.
-    pending += decoder.decode();
-    if (pending) consumeLine(pending);
+    if (!terminated) {
+        pending += decoder.decode();
+        if (pending) consumeLine(pending);
+    }
     if (!dispatched && toolCallsMap.size && onToolCall) onToolCall(extractNativeToolCalls(toolCallsMap));
 
     return full;
@@ -358,6 +365,7 @@ export async function readOllamaStream(reader, onDelta, onToolCall) {
     const decoder = new TextDecoder();
     let pending = '', full = '';
     const calls = [];
+    let terminated = false;
     const consume = line => {
         if (!line.trim()) return;
         const data = JSON.parse(line);
@@ -366,6 +374,7 @@ export async function readOllamaStream(reader, onDelta, onToolCall) {
         full += delta;
         if (delta && onDelta) onDelta(delta, full);
         calls.push(...extractNativeToolCalls(data.message?.tool_calls));
+        if (data.done === true) terminated = true;
     };
     for (;;) {
         const { done, value } = await reader.read();
@@ -373,10 +382,16 @@ export async function readOllamaStream(reader, onDelta, onToolCall) {
         pending += decoder.decode(value, { stream: true });
         const lines = pending.split('\n');
         pending = lines.pop();
-        lines.forEach(consume);
+        for (const line of lines) {
+            consume(line);
+            if (terminated) break;
+        }
+        if (terminated) break;
     }
-    pending += decoder.decode();
-    consume(pending);
+    if (!terminated) {
+        pending += decoder.decode();
+        consume(pending);
+    }
     if (calls.length && onToolCall) onToolCall(calls);
     return full;
 }

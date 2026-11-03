@@ -287,36 +287,45 @@ export async function describeHttpError(response) {
  * Fetch the model list from an OpenAI-compatible endpoint.
  * Returns an array of model id strings.
  */
-export async function fetchProviderModels(url, key) {
+export async function fetchProviderModels(url, key, { signal, timeoutMs = 15000 } = {}) {
     const fetchUrl = getModelsEndpoint(url);
-
-    let response;
+    const controller = new AbortController();
+    const abort = () => controller.abort(signal.reason);
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    signal?.addEventListener('abort', abort, { once: true });
+    const timeout = Math.max(1, Math.min(60000, Number.isFinite(timeoutMs) ? timeoutMs : 15000));
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeout);
     try {
-        response = await fetch(fetchUrl, { headers: buildHeaders(key) });
+        const response = await fetch(fetchUrl, { headers: buildHeaders(key), signal: controller.signal });
+        if (!response.ok) throw new Error(await describeHttpError(response));
+
+        const data = await response.json();
+        const raw = data?.data || data?.models;
+        const models = Array.isArray(raw) ? raw.map(model => {
+            if (typeof model === 'string') return model.trim();
+            if (!model || typeof model !== 'object') return '';
+            const id = model.id || model.name || model.model;
+            return typeof id === 'string' ? id.trim() : '';
+        }).filter(Boolean) : [];
+        if (!models.length) throw new Error('No models found. The endpoint returned no usable model IDs. Enter a model manually.');
+        return [...new Set(models)];
     } catch (e) {
-        throw new Error(describeConnectionError(e, url));
+        if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+        if (timedOut) throw new Error(`Model discovery timed out after ${timeout / 1000} seconds. Check the server or enter a model manually.`);
+        if (e instanceof TypeError) throw new Error(describeConnectionError(e, url));
+        throw e;
+    } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', abort);
     }
-
-    if (!response.ok) {
-        throw new Error(await describeHttpError(response));
-    }
-
-    const data = await response.json().catch(() => null);
-    const raw = data?.data || data?.models || [];
-    if (!Array.isArray(raw) || raw.length === 0) {
-        throw new Error('No models found. The endpoint responded, but returned an empty model list.');
-    }
-
-    return raw
-        .map(m => (typeof m === 'string' ? m : m.id || m.name || m.model))
-        .filter(Boolean);
 }
 
 /**
  * Probe an endpoint and report back in plain language.
  * Never throws — the result object is the whole answer.
  */
-export async function testConnection(url, key) {
+export async function testConnection(url, key, options) {
     const trimmed = (url || '').trim();
     if (!trimmed) {
         return { ok: false, message: 'Enter an endpoint URL first.' };
@@ -326,7 +335,7 @@ export async function testConnection(url, key) {
     }
 
     try {
-        const models = await fetchProviderModels(trimmed, key);
+        const models = await fetchProviderModels(trimmed, key, options);
         const local = isLocalEndpoint(trimmed);
         return {
             ok: true,

@@ -102,6 +102,7 @@ export function closeToolEditor() {
 }
 
 export function saveToolCode() {
+    if (state.libraryBusy) return;
     const aspect = getCurrentAspect();
     const name = document.getElementById('tool-editor-name').value.trim();
     const code = editorView.state.doc.toString();

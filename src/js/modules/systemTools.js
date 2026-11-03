@@ -76,23 +76,65 @@ async function executeTool(args, state) {
     },
     {
         name: 'Weather.js',
-        description: 'Mock weather tool returning serene conditions.',
-        code: `// Weather tool that returns serene weather descriptions
-// Usage: executeTool({ location: "Redwoods" })
+        description: 'Current weather from Open-Meteo for a city or coordinates. Requires network approval.',
+        code: `// Current weather from Open-Meteo (model data, not a local sensor).
+// Usage: executeTool({ location: "Kyoto, Japan" })
+// Usage: executeTool({ latitude: 46.09, longitude: -64.78, unit: "celsius" })
 async function executeTool(args, state) {
-    const loc = args.location || "Redwoods";
-    const conditions = [
-        "A gentle mist rolls across the water, keeping the area cool. 62°F.",
-        "Golden rays of sunshine break through the canopy. 74°F.",
-        "A soft, serene drizzle falls. 58°F.",
-        "Clear evening skies with a crisp breeze. 50°F."
-    ];
-    const index = Math.abs(loc.length + new Date().getMinutes()) % conditions.length;
-    return {
-        location: loc,
-        condition: conditions[index],
-        serenityLevel: "Maximum"
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return { error: 'Provide a location or latitude and longitude.' };
+    const unit = args.unit === undefined ? 'celsius' : args.unit;
+    if (unit !== 'celsius' && unit !== 'fahrenheit') return { error: 'unit must be celsius or fahrenheit.' };
+    const validCoordinates = (lat, lon) => Number.isFinite(lat) && lat >= -90 && lat <= 90
+        && Number.isFinite(lon) && lon >= -180 && lon <= 180;
+    const read = async url => {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Weather service returned HTTP ' + response.status + '.');
+        const data = await response.json();
+        if (!data || typeof data !== 'object' || data.error) throw new Error('Weather service returned invalid data.');
+        return data;
     };
+    try {
+        let latitude = args.latitude;
+        let longitude = args.longitude;
+        let location;
+        if (latitude !== undefined || longitude !== undefined) {
+            if (!validCoordinates(latitude, longitude)) return { error: 'Latitude must be -90..90 and longitude -180..180, both finite numbers.' };
+            location = String(latitude) + ', ' + String(longitude);
+        } else {
+            if (typeof args.location !== 'string' || args.location.trim().length < 2 || args.location.length > 200) {
+                return { error: 'Provide a city name between 2 and 200 characters, or coordinates.' };
+            }
+            const places = await read('https://geocoding-api.open-meteo.com/v1/search?count=1&language=en&format=json&name=' + encodeURIComponent(args.location.trim()));
+            const place = Array.isArray(places.results) && places.results[0];
+            if (!place) return { error: 'No matching location found. Add a country or use coordinates.' };
+            if (!validCoordinates(place.latitude, place.longitude) || typeof place.name !== 'string') throw new Error('Geocoding returned invalid coordinates.');
+            latitude = place.latitude;
+            longitude = place.longitude;
+            location = [place.name, place.admin1, place.country].filter(value => typeof value === 'string' && value).join(', ');
+        }
+        const sourceUrl = 'https://api.open-meteo.com/v1/forecast?latitude=' + latitude + '&longitude=' + longitude
+            + '&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m&temperature_unit=' + unit + '&wind_speed_unit=kmh&timezone=auto&forecast_days=1';
+        const data = await read(sourceUrl);
+        const current = data.current;
+        const units = data.current_units;
+        const expectedUnit = unit === 'fahrenheit' ? '°F' : '°C';
+        if (!current || ![current.temperature_2m, current.apparent_temperature, current.wind_speed_10m].every(Number.isFinite)
+            || current.wind_speed_10m < 0 || !Number.isInteger(current.weather_code) || current.weather_code < 0 || current.weather_code > 99
+            || typeof current.time !== 'string' || !current.time || typeof data.timezone !== 'string'
+            || units?.temperature_2m !== expectedUnit || units?.apparent_temperature !== expectedUnit || units?.wind_speed_10m !== 'km/h') {
+            throw new Error('Weather service returned incomplete values or unexpected units.');
+        }
+        return {
+            location, latitude, longitude, time: current.time, timezone: data.timezone,
+            temperature: current.temperature_2m, apparentTemperature: current.apparent_temperature,
+            temperatureUnit: expectedUnit, weatherCode: current.weather_code,
+            windSpeed: current.wind_speed_10m, windSpeedUnit: 'km/h',
+            source: 'Open-Meteo', sourceUrl,
+            attribution: 'Weather data by Open-Meteo.com; geocoding by GeoNames.'
+        };
+    } catch (error) {
+        return { error: 'Weather unavailable: ' + error.message };
+    }
 }`
     },
     {

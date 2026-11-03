@@ -36,9 +36,11 @@ export function createConversation(messages = [], title = null) {
  * produces something better than "New chat".
  */
 export function deriveTitle(messages) {
+    const candidates = Array.isArray(messages) ? messages : [];
+    const hasText = m => m && typeof m.content === 'string' && m.content.trim();
     const source =
-        messages.find(m => m.role === 'user' && m.content && m.content.trim()) ||
-        messages.find(m => m.role === 'assistant' && m.content && m.content.trim());
+        candidates.find(m => hasText(m) && m.role === 'user') ||
+        candidates.find(m => hasText(m) && m.role === 'assistant');
     if (!source) return 'New chat';
 
     const firstLine = String(source.content)
@@ -58,11 +60,15 @@ export function deriveTitle(messages) {
  * legacy single-`chatHistory` aspect to the conversation model.
  */
 export function normalizeConversations(aspect) {
-    if (!aspect) return aspect;
+    if (!aspect || typeof aspect !== 'object' || Array.isArray(aspect)) return aspect;
+
+    if (Array.isArray(aspect.conversations) && aspect.conversations.some(c => !isRecord(c))) {
+        aspect.conversations = aspect.conversations.filter(isRecord);
+    }
 
     if (!Array.isArray(aspect.conversations) || aspect.conversations.length === 0) {
         // Legacy shape: one flat chatHistory becomes conversation number one.
-        const legacy = Array.isArray(aspect.chatHistory) ? aspect.chatHistory : [];
+        const legacy = normalizeMessages(aspect.chatHistory);
         const conv = createConversation(legacy);
         conv.title = deriveTitle(legacy);
         aspect.conversations = [conv];
@@ -70,12 +76,14 @@ export function normalizeConversations(aspect) {
     }
 
     // Repair any conversation missing required fields (hand-edited or partial imports).
+    const ids = new Set();
     aspect.conversations.forEach(conv => {
-        if (!conv.id) conv.id = newId('conv');
-        if (!Array.isArray(conv.messages)) conv.messages = [];
-        if (!conv.title) conv.title = deriveTitle(conv.messages);
-        if (!conv.createdAt) conv.createdAt = Date.now();
-        if (!conv.updatedAt) conv.updatedAt = conv.createdAt;
+        if (typeof conv.id !== 'string' || !conv.id.trim() || ids.has(conv.id)) conv.id = newId('conv');
+        ids.add(conv.id);
+        conv.messages = normalizeMessages(conv.messages);
+        if (typeof conv.title !== 'string' || !conv.title.trim()) conv.title = deriveTitle(conv.messages);
+        if (!validTimestamp(conv.createdAt)) conv.createdAt = Date.now();
+        if (!validTimestamp(conv.updatedAt)) conv.updatedAt = conv.createdAt;
     });
 
     const active = aspect.conversations.find(c => c.id === aspect.activeConversationId);
@@ -85,6 +93,26 @@ export function normalizeConversations(aspect) {
     aspect.chatHistory = target.messages;
 
     return aspect;
+}
+
+function isRecord(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function validTimestamp(value) {
+    return Number.isFinite(value) && value > 0 && value <= 8.64e15;
+}
+
+function normalizeMessages(messages) {
+    if (!Array.isArray(messages)) return [];
+    const valid = m => isRecord(m) && ['user', 'assistant', 'system', 'tool'].includes(m.role)
+        && (typeof m.content === 'string' || (m.role === 'assistant' && m.content == null && Array.isArray(m.tool_calls)));
+    const result = messages.every(valid) ? messages : messages.filter(valid);
+    // Retain tool-call metadata while giving renderers a safe text field.
+    for (const message of result) {
+        if (message.content == null) message.content = '';
+    }
+    return result;
 }
 
 export function getActiveConversation(aspect) {
@@ -148,7 +176,7 @@ export function renameConversation(aspect, conversationId, title) {
     normalizeConversations(aspect);
     const conv = aspect.conversations.find(c => c.id === conversationId);
     if (!conv) return false;
-    const clean = (title || '').trim();
+    const clean = typeof title === 'string' ? title.trim() : '';
     conv.title = clean || deriveTitle(conv.messages);
     conv.titleLocked = Boolean(clean);
     conv.updatedAt = Date.now();

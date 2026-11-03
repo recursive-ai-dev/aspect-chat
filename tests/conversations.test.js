@@ -107,6 +107,42 @@ describe('normalizeConversations', () => {
     it('tolerates null', () => {
         expect(normalizeConversations(null)).toBeNull();
     });
+
+    it('repairs malformed imports and duplicate ids while retaining tool metadata', () => {
+        const aspect = { conversations: [null, [], 3, {
+            id: 'duplicate', title: {}, createdAt: -1, updatedAt: Infinity,
+            messages: [null, { role: 'user', content: 42 }, { role: 'user', content: 'Readable' },
+                { role: 'assistant', content: null, tool_calls: [{ id: 'call-1' }] }]
+        }, { id: 'duplicate', messages: 'bad' }] };
+        normalizeConversations(aspect);
+        expect(aspect.conversations).toHaveLength(2);
+        expect(new Set(aspect.conversations.map(c => c.id)).size).toBe(2);
+        const first = aspect.conversations[0];
+        expect(first.title).toBe('Readable');
+        expect(first.createdAt).toBeGreaterThan(0);
+        expect(Number.isFinite(first.updatedAt)).toBe(true);
+        expect(first.messages).toEqual([{ role: 'user', content: 'Readable' }, { role: 'assistant', content: '', tool_calls: [{ id: 'call-1' }] }]);
+    });
+
+    it('maintains normalization invariants for 500 deterministic adversarial records (seed 0x51a7)', () => {
+        let seed = 0x51a7;
+        const next = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed; };
+        const values = [null, [], 12, 'text', {}, { role: 'user', content: 4 }, { role: 'assistant', content: 'Hi' }];
+        for (let i = 0; i < 500; i++) {
+            const aspect = { conversations: Array.from({ length: next() % 6 }, () =>
+                next() % 2 ? structuredClone(values[next() % values.length]) : {
+                    id: 'duplicate', title: values[next() % values.length],
+                    messages: Array.from({ length: next() % 8 }, () => structuredClone(values[next() % values.length]))
+                }) };
+            normalizeConversations(aspect);
+            expect(aspect.conversations.length).toBeGreaterThan(0);
+            expect(new Set(aspect.conversations.map(c => c.id)).size).toBe(aspect.conversations.length);
+            expect(aspect.chatHistory).toBe(aspect.conversations.find(c => c.id === aspect.activeConversationId).messages);
+            const first = JSON.stringify(aspect);
+            normalizeConversations(aspect);
+            expect(JSON.stringify(aspect)).toBe(first);
+        }
+    });
 });
 
 describe('conversation lifecycle', () => {

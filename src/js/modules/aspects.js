@@ -6,7 +6,7 @@ import { showEditorView } from './ui.js';
 import { markChangesUnsaved } from './ui.js';
 import { state } from './state.js';
 import { systemTools } from './systemTools.js';
-import { loadAspects, deleteAspectRecord } from './persist.js';
+import { loadAspects, deleteAspectRecord, isPersistReady } from './persist.js';
 import { normalizeConversations, newId } from './conversations.js';
 
 
@@ -195,7 +195,17 @@ import { normalizeConversations, newId } from './conversations.js';
         }
 
 
-        export async function loadDefaultAspects({ forceDefault = false } = {}) {
+        export async function loadDefaultAspects(options = {}) {
+            if (blockedByGeneration()) return;
+            state.libraryBusy = true;
+            try {
+                return await loadAspectLibrary(options);
+            } finally {
+                state.libraryBusy = false;
+            }
+        }
+
+        async function loadAspectLibrary({ forceDefault = false } = {}) {
             let saved = [];
             if (!forceDefault) {
                 try {
@@ -221,6 +231,9 @@ import { normalizeConversations, newId } from './conversations.js';
                     renderAspectList();
                     applyAspectBackground();
                     showChatView();
+                    if (!isPersistReady()) {
+                        window.showToast?.('Recovered an older library. Changes are not being saved; export a backup, then reload to retry storage.', 'error');
+                    }
                     return;
                 }
             }
@@ -245,90 +258,14 @@ Keep your responses friendly, concise, and helpful.`,
 - Shareable .aspect files.`,
                 icon: getStudioGuideIcon(),
                 background: 'alone_image_pack/lake_sunset_001.jpeg',
-                tools: [
-                    {
-                        name: 'Calculate.js',
-                        code: `// Calculator tool for basic math
-// Usage: executeTool({ expression: "2 + 2" })
-async function executeTool(args, state) {
-    const expr = args.expression || args;
-    if (!expr) return "No expression provided.";
-
-    // Safe mathematical expression evaluator
-    const evaluate = (expression) => {
-        // Remove spaces for easier tokenization, though the regex mostly handles it
-        // We'll tokenize keeping numbers and operators
-        const tokens = expression.match(/\\d+\\.\\d+|\\d+|[-+*/()]/g) || [];
-        if (tokens.length === 0) throw new Error("No valid tokens found");
-        let pos = 0;
-
-        const parseFactor = () => {
-            if (pos >= tokens.length) throw new Error("Unexpected end of expression");
-            let sign = 1;
-            while (tokens[pos] === '+' || tokens[pos] === '-') {
-                if (tokens[pos++] === '-') sign = -sign;
-            }
-            if (pos >= tokens.length) throw new Error("Unexpected end of expression");
-
-            if (tokens[pos] === '(') {
-                pos++;
-                const val = parseExpression();
-                if (pos >= tokens.length || tokens[pos] !== ')') throw new Error("Missing closing parenthesis");
-                pos++;
-                return sign * val;
-            }
-            const val = parseFloat(tokens[pos++]);
-            if (isNaN(val)) throw new Error("Invalid number");
-            return sign * val;
-        };
-
-        const parseTerm = () => {
-            let val = parseFactor();
-            while (pos < tokens.length && (tokens[pos] === '*' || tokens[pos] === '/')) {
-                const op = tokens[pos++];
-                const nextVal = parseFactor();
-                if (op === '*') val *= nextVal;
-                else val /= nextVal;
-            }
-            return val;
-        };
-
-        const parseExpression = () => {
-            let val = parseTerm();
-            while (pos < tokens.length && (tokens[pos] === '+' || tokens[pos] === '-')) {
-                const op = tokens[pos++];
-                const nextVal = parseTerm();
-                if (op === '+') val += nextVal;
-                else val -= nextVal;
-            }
-            return val;
-        };
-
-        const result = parseExpression();
-        if (pos < tokens.length) throw new Error("Unexpected tokens at end of expression");
-        return result;
-    };
-
-    try {
-        if (/^[0-9+\\\-/*().\\s]+$/.test(expr)) {
-            const res = evaluate(expr);
-            return { result: res };
-        }
-        return { error: "Invalid math expression characters." };
-    } catch (e) {
-        return { error: e.message };
-    }
-}`
-                    },
-                    {
-                        name: 'Weather.js',
-                        code: `// Weather tool that returns serene weather descriptions\n// Usage: executeTool({ location: "Redwoods" })\nfunction executeTool(args) {\n    const loc = args.location || "Redwoods";\n    const conditions = [\n        "A gentle mist rolls across the water, keeping the redwoods cool. 62°F.",\n        "Golden rays of sunshine break through the pine canopy. 74°F.",\n        "A soft, serene drizzle falls, creating concentric rings on the lake. 58°F.",\n        "Clear evening skies with a crisp breeze rustling the redwood needles. 50°F."\n    ];\n    const index = Math.abs(loc.length + new Date().getMinutes()) % conditions.length;\n    return {\n        location: loc,\n        condition: conditions[index],\n        serenityLevel: "Maximum"\n    };\n}`
-                    },
-                    {
-                        name: 'DateTime.js',
-                        code: `// Time tool returning the local date and time\n// Usage: executeTool({})\nfunction executeTool(args) {\n    const now = new Date();\n    return {\n        time: now.toLocaleTimeString(),\n        date: now.toLocaleDateString(),\n        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone\n    };\n}`
-                    }
-                ],
+                tools: systemTools
+                    .filter(tool => ['Calculator.js', 'Weather.js', 'DateTime.js'].includes(tool.name))
+                    .map(tool => ({
+                        ...JSON.parse(JSON.stringify(tool)),
+                        // Preserve the Studio Guide's existing public alias.
+                        name: tool.name === 'Calculator.js' ? 'Calculate.js' : tool.name,
+                        state: {}
+                    })),
                 memory: {},
                 chatHistory: [
                     { role: 'assistant', content: 'Welcome to Aspect Studio! 🌸 I am the Studio Guide. I am here to help you get started. Do you want to learn how to set up your API key, or would you like to know how to create your first custom Aspect?' }
@@ -411,9 +348,11 @@ async function executeTool(args, state) {
             if (typeof aspect.description !== 'string') aspect.description = '';
             if (typeof aspect.instructions !== 'string') aspect.instructions = '';
             if (typeof aspect.knowledge !== 'string') aspect.knowledge = '';
+            if (typeof aspect.icon !== 'string') aspect.icon = '';
+            if (typeof aspect.background !== 'string') aspect.background = '';
             if (!Array.isArray(aspect.tools)) aspect.tools = [];
-            if (!aspect.memory || typeof aspect.memory !== 'object') aspect.memory = {};
-            if (!aspect.params || typeof aspect.params !== 'object') aspect.params = {};
+            if (!aspect.memory || typeof aspect.memory !== 'object' || Array.isArray(aspect.memory)) aspect.memory = {};
+            if (!aspect.params || typeof aspect.params !== 'object' || Array.isArray(aspect.params)) aspect.params = {};
 
             // Trust is now per-tool, keyed by a hash of the tool's code
             // (`tool.trustedHash`). `aspect.toolsReviewed` is kept only as a
@@ -559,7 +498,14 @@ async function executeTool(args, state) {
             }
         ];
 
+        function blockedByGeneration() {
+            if (!state.isGenerating && !state.libraryBusy) return false;
+            window.showToast?.(state.libraryBusy ? 'Wait for the library operation to finish.' : 'Wait for the current response to finish, or press Stop.', 'error');
+            return true;
+        }
+
         export function createNewAspect() {
+            if (blockedByGeneration()) return;
             document.getElementById('create-aspect-modal').classList.remove('hidden');
 
             const gallery = document.getElementById('template-gallery');
@@ -585,6 +531,7 @@ async function executeTool(args, state) {
         }
 
         export function acceptCreateAspectFromTemplate(templateId) {
+            if (blockedByGeneration()) return;
             const template = aspectTemplates.find(t => t.id === templateId) || aspectTemplates[0];
 
             const initialTools = [];
@@ -642,6 +589,7 @@ async function executeTool(args, state) {
         }
 
         export function acceptCreateAspect() {
+            if (blockedByGeneration()) return;
             // These inputs only exist in the legacy "name and description first"
             // create flow; the template gallery is the path the UI uses today.
             const nameInput = document.getElementById('create-aspect-name-input');
@@ -677,6 +625,7 @@ async function executeTool(args, state) {
         }
 
         export function selectAspect(id) {
+            if (blockedByGeneration()) return;
             state.currentAspectId = id;
             // Remember the selection so a reload reopens where the user left off.
             try {
@@ -697,6 +646,7 @@ async function executeTool(args, state) {
         }
 
         export function updateAspectData(field, value) {
+            if (state.libraryBusy) return;
             const aspect = getCurrentAspect();
             if (aspect) {
                 aspect[field] = value;
@@ -710,6 +660,7 @@ async function executeTool(args, state) {
          * from the editor after the user has had the chance to read the code.
          */
         export function trustAspectTools() {
+            if (state.libraryBusy) return;
             const aspect = getCurrentAspect();
             if (!aspect) return;
             if (!window.confirm(
@@ -726,6 +677,7 @@ async function executeTool(args, state) {
         }
 
         export async function deleteCurrentAspect() {
+            if (blockedByGeneration()) return;
             if (state.aspects.length <= 1) {
                 window.showToast("You must keep at least one Aspect. Create a new one before deleting this one.", "error");
                 return;

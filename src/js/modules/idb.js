@@ -15,9 +15,20 @@ export const STORE_MEMORY = 'memory';
 export const STORE_ASPECTS = 'aspects';
 export const STORE_SNAPSHOTS = 'snapshots';
 
+let dbPromise = null;
+let connection = null;
+
+function invalidate(db) {
+    if (connection === db) {
+        connection = null;
+        dbPromise = null;
+    }
+}
+
 function openDatabase() {
     return new Promise((resolve, reject) => {
         let request;
+        let failed = false;
         try {
             request = indexedDB.open(DB_NAME, DB_VERSION);
         } catch (err) {
@@ -47,37 +58,64 @@ function openDatabase() {
 
         request.onsuccess = (e) => {
             const db = e.target.result;
+            // A blocked request cannot be cancelled. Close its late result
+            // after rejection rather than retaining an unreachable connection.
+            if (failed) {
+                db.close();
+                return;
+            }
+            connection = db;
             // Another tab upgrading the schema would otherwise block forever.
-            db.onversionchange = () => db.close();
+            db.onversionchange = () => { db.close(); invalidate(db); };
+            db.onclose = () => invalidate(db);
             resolve(db);
         };
-        request.onerror = (e) => reject(e.target.error);
-        request.onblocked = () => reject(new Error(
-            'The Aspect Studio database is open in another tab running an older version. Close that tab and reload.'
-        ));
+        request.onerror = (e) => { failed = true; reject(e.target.error); };
+        request.onblocked = () => {
+            failed = true;
+            reject(new Error('The Aspect Studio database is open in another tab running an older version. Close that tab and retry.'));
+        };
     });
 }
 
-let dbPromise = openDatabase();
-
 export function getDB() {
+    if (!dbPromise) {
+        const attempt = openDatabase();
+        dbPromise = attempt;
+        attempt.catch(() => {
+            if (dbPromise === attempt) dbPromise = null;
+        });
+    }
     return dbPromise;
+}
+
+/** Acquire a transaction, reopening a closed cached connection once. */
+export async function createTransaction(storeName, mode = 'readonly') {
+    let db = await getDB();
+    let tx;
+    try {
+        tx = db.transaction(storeName, mode);
+    } catch (err) {
+        // Retrying transaction *creation* is safe: no callback or write has
+        // run. Never retry an aborted transaction or its side effects.
+        if (err.name !== 'InvalidStateError') throw err;
+        invalidate(db);
+        db = await getDB();
+        tx = db.transaction(storeName, mode);
+    }
+    return tx;
 }
 
 /** Run `fn(store)` inside a transaction and resolve when it commits. */
 export async function withStore(storeName, mode, fn) {
-    const db = await dbPromise;
+    const tx = await createTransaction(storeName, mode);
     return new Promise((resolve, reject) => {
-        let tx;
-        try {
-            tx = db.transaction(storeName, mode);
-        } catch (err) {
-            reject(err);
-            return;
-        }
         let result;
         try {
             result = fn(tx.objectStore(storeName), tx);
+            // A failed request may reject before onabort rejects the outer
+            // transaction promise. Attach a handler immediately in that case.
+            if (result?.then) Promise.resolve(result).catch(() => {});
         } catch (err) {
             try { tx.abort(); } catch { /* already aborting */ }
             reject(err);
@@ -99,6 +137,8 @@ export function requestToPromise(request) {
 
 /** Test-only: reopen the connection after fake-indexeddb is reset. */
 export function resetDatabaseForTesting() {
-    dbPromise = openDatabase();
-    return dbPromise;
+    if (connection) connection.close();
+    connection = null;
+    dbPromise = null;
+    return getDB();
 }

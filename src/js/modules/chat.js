@@ -201,7 +201,7 @@ export function escapeHtml(str) {
 
         /** Toast + bail when an action is blocked by an in-flight response. */
         function blockedByGeneration() {
-            if (!state.isGenerating && !state.abortController) return false;
+            if (!state.isGenerating && !state.abortController && !state.libraryBusy) return false;
             if (typeof window !== 'undefined' && window.showToast) {
                 window.showToast('Wait for the current response to finish, or press Stop.', 'error');
             }
@@ -224,6 +224,7 @@ export function escapeHtml(str) {
         }
 
         function undoDelete() {
+            if (blockedByGeneration()) return;
             if (!lastDeleted) return;
             const aspect = getCurrentAspect();
             if (!aspect || !aspect.chatHistory) return;

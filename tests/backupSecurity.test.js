@@ -29,6 +29,8 @@ vi.mock('../src/js/modules/persist.js', async (importOriginal) => {
         getSnapshot: vi.fn(),
         writeSnapshot: vi.fn(),
         armPersistence: vi.fn(),
+        disarmPersistence: vi.fn(),
+        isPersistReady: vi.fn(() => true),
         serializeLibrary: vi.fn((a) => JSON.stringify({ aspects: a }))
     };
 });
@@ -46,7 +48,8 @@ vi.mock('../src/js/modules/aspects.js', () => ({
 
 vi.mock('../src/js/modules/state.js', () => ({
     state: { aspects: [], currentAspectId: null },
-    persistAspects: vi.fn()
+    persistAspects: vi.fn(),
+    flushAspects: vi.fn().mockResolvedValue(undefined)
 }));
 
 // ── Helper ────────────────────────────────────────────────────────────────────

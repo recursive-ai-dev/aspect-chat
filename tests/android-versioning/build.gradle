@@ -1,0 +1,29 @@
+// Standalone contract tests: ./android/gradlew --no-daemon -p tests/android-versioning verifyVersionCodes
+apply from: new File(buildFile.parentFile, '../../android/versioning.gradle')
+
+tasks.register('verifyVersionCodes') {
+    doLast {
+        ['0.0.1': 1, '1.0.0': 10000, '1.99.99': 19999, '210000.0.0': 2100000000].each { version, code ->
+            assert androidVersionCode(version, null) == code
+        }
+        ['0.0.0', '1.100.0', '1.0.100', '210000.0.1', '9999999999999999999.0.0',
+         '1.2', '../1.0.0', '01.0.0', '1.0.0/bad', '1.0.0-01', '1.0.0-rc.1', '1.0.0+build.1'].each { version ->
+            boolean rejected = false
+            try { androidVersionCode(version, null) } catch (GradleException ignored) { rejected = true }
+            assert rejected: "Unexpected automatic mapping for ${version}"
+        }
+        ['', '0', '-1', '1.2', '01', '2100000001', '999999999999999999999999', ' 1', '1e3'].each { code ->
+            boolean rejected = false
+            try { androidVersionCode('1.0.0', code) } catch (GradleException ignored) { rejected = true }
+            assert rejected: "Unexpected explicit mapping for ${code}"
+        }
+        assert androidVersionCode('1.0.100', '2100000000') == 2100000000
+        assert androidVersionCode('2.0.0-rc.1+build.1', '20001') == 20001
+        assert androidVersionCode('2.0.0-rc--test', '20002') == 20002
+        def codes = new HashSet<Integer>()
+        (1..2).each { major -> (0..99).each { minor -> (0..99).each { patch ->
+            assert codes.add(androidVersionCode("${major}.${minor}.${patch}".toString(), null))
+        } } }
+        assert codes.size() == 20000
+    }
+}

@@ -13,6 +13,7 @@
 
 import { STORE_ASPECTS, STORE_SNAPSHOTS, withStore, requestToPromise } from './idb.js';
 import { normalizeConversations } from './conversations.js';
+import { durableMemory } from './memory.js';
 
 const LEGACY_KEY = 'aspects_data';
 const LEGACY_BACKUP_KEY = 'aspects_data_v1_backup';
@@ -22,6 +23,7 @@ const SAVE_DEBOUNCE_MS = 400;
 let saveTimer = null;
 let pendingSave = null;
 let lastError = null;
+const activeSaves = new Set();
 
 /**
  * Persistence is "armed" only once we know the store's real contents.
@@ -52,6 +54,32 @@ export function armPersistence() {
     lastError = null;
 }
 
+export function disarmPersistence(error = lastError) {
+    persistState = 'failed';
+    lastError = error;
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = null;
+    if (pendingSave) pendingSave.resolve();
+    pendingSave = null;
+}
+
+/** Stored/imported render caches are untrusted HTML, never presentation input. */
+function withoutRuntimeCaches(aspect) {
+    const cleanMessages = messages => Array.isArray(messages) ? messages.map(message => {
+        if (!message || typeof message !== 'object' || Array.isArray(message)) return message;
+        const { _renderedHtml, _renderedContent, _isEditing, ...clean } = message;
+        return clean;
+    }) : messages;
+    return {
+        ...aspect,
+        ...(Array.isArray(aspect.chatHistory) ? { chatHistory: cleanMessages(aspect.chatHistory) } : {}),
+        ...(Array.isArray(aspect.conversations) ? { conversations: aspect.conversations.map(conversation => {
+            if (!conversation || typeof conversation !== 'object' || Array.isArray(conversation)) return conversation;
+            return { ...conversation, messages: cleanMessages(conversation.messages) };
+        }) } : {})
+    };
+}
+
 /**
  * Strip runtime-only fields before writing.
  *
@@ -61,10 +89,11 @@ export function armPersistence() {
  * and `_isEditing` is transient UI state.
  */
 export function serializeAspect(aspect) {
-    const { chatHistory, ...rest } = aspect;
+    const { chatHistory, memoryListeners, ...rest } = aspect;
 
     return {
         ...rest,
+        memory: durableMemory(aspect.memory),
         conversations: (aspect.conversations || []).map(conv => ({
             id: conv.id,
             title: conv.title,
@@ -78,6 +107,7 @@ export function serializeAspect(aspect) {
 
 /** Write every aspect in one transaction, removing any that were deleted. */
 export async function saveAspects(aspects) {
+    if (persistState !== 'ready') throw new Error('Storage recovery is read-only. Reload to retry before saving.');
     const records = aspects.map(a => serializeAspect(normalizeConversations(a)));
     const keepIds = new Set(records.map(r => r.id));
 
@@ -136,29 +166,35 @@ export function scheduleSave(aspects) {
     saveTimer = setTimeout(() => {
         saveTimer = null;
         pendingSave = null;
-        saveAspects(entry.aspects).then(entry.resolve, entry.reject);
+        commitPending(entry);
     }, SAVE_DEBOUNCE_MS);
 
     return pendingSave.promise;
 }
 
+function commitPending(entry) {
+    const work = saveAspects(entry.aspects);
+    activeSaves.add(work);
+    work.then(entry.resolve, entry.reject);
+    work.then(() => activeSaves.delete(work), () => activeSaves.delete(work));
+    return work;
+}
+
 /** Write any queued changes immediately. */
 export async function flushSave() {
     if (persistState !== 'ready') return;
-    if (!pendingSave) return;
+    if (!pendingSave) {
+        await Promise.all(activeSaves);
+        return;
+    }
     if (saveTimer) {
         clearTimeout(saveTimer);
         saveTimer = null;
     }
     const entry = pendingSave;
     pendingSave = null;
-    try {
-        await saveAspects(entry.aspects);
-        entry.resolve();
-    } catch (err) {
-        entry.reject(err);
-        throw err;
-    }
+    await commitPending(entry);
+    await Promise.all(activeSaves);
 }
 
 /** The most recent persistence failure, if any. */
@@ -200,8 +236,22 @@ export async function migrateFromLocalStorage() {
         return null;
     }
 
-    const normalized = parsed.map(a => normalizeConversations(a));
-    await saveAspects(normalized);
+    if (parsed.some(a => !a || typeof a !== 'object' || Array.isArray(a))) {
+        throw new Error('Legacy library contains invalid Aspect records.');
+    }
+    const normalized = parsed.map(a => normalizeConversations(withoutRuntimeCaches(a)));
+    const records = normalized.map(serializeAspect);
+    let migrated = false;
+    // Check and insert in the same transaction: a retry (or another tab)
+    // must never replace an already populated, more recent library.
+    await withStore(STORE_ASPECTS, 'readwrite', store => {
+        const read = store.count();
+        read.onsuccess = () => {
+            if (read.result !== 0) return;
+            for (const record of records) store.put(record);
+            migrated = true;
+        };
+    });
 
     try {
         localStorage.setItem(LEGACY_BACKUP_KEY, raw);
@@ -213,7 +263,8 @@ export async function migrateFromLocalStorage() {
         console.warn('Could not update localStorage after migration', err.message);
     }
 
-    return normalized;
+    if (migrated) persistState = 'ready';
+    return migrated ? normalized : null;
 }
 
 /**
@@ -233,12 +284,12 @@ export async function loadAspects() {
         if (!Array.isArray(rows)) throw new Error('IndexedDB returned a non-array result');
         persistState = 'ready';
         if (rows.length === 0) return [];
-        const normalized = rows.map(a => normalizeConversations(a));
+        const normalized = rows.map(a => normalizeConversations({ ...withoutRuntimeCaches(a), memory: durableMemory(a.memory) }));
         // A load is a known-consistent state; keep it as a restore point.
         writeSnapshot(normalized, 'startup');
         return normalized;
     } catch (err) {
-        lastError = err;
+        disarmPersistence(err);
         console.error('Failed to load Aspects from IndexedDB', err);
 
         // Last resort: if IndexedDB is unavailable (private mode, disabled
@@ -250,10 +301,10 @@ export async function loadAspects() {
             if (raw) {
                 const parsed = JSON.parse(raw);
                 if (Array.isArray(parsed) && parsed.length > 0) {
-                    // We recovered real data from the legacy blob — writing it
-                    // back is safe, so stay armed.
-                    persistState = 'ready';
-                    return parsed.map(a => normalizeConversations(a));
+                    // This may be a stale backup. It is useful for display and
+                    // export, but cannot authorize replacing unread disk rows.
+                    if (parsed.some(a => !a || typeof a !== 'object' || Array.isArray(a))) throw new Error('Invalid legacy records');
+                    return parsed.map(a => normalizeConversations({ ...withoutRuntimeCaches(a), memory: durableMemory(a.memory) }));
                 }
             }
         } catch { /* nothing left to try */ }
@@ -344,7 +395,7 @@ export async function listSnapshots() {
 export async function getSnapshot(id) {
     const row = await withStore(STORE_SNAPSHOTS, 'readonly', (store) => requestToPromise(store.get(id)));
     if (!row || !Array.isArray(row.aspects)) return null;
-    return { ...row, aspects: row.aspects.map(a => normalizeConversations(a)) };
+    return { ...row, aspects: row.aspects.map(a => normalizeConversations({ ...withoutRuntimeCaches(a), memory: durableMemory(a.memory) })) };
 }
 
 /* ------------------------------------------------------------------ *
@@ -388,7 +439,8 @@ export function sanitizeImportedAspect(rawAspect) {
             // trustedHash, allowNetwork, allowedOrigins deliberately omitted
         }));
     return {
-        ...rawAspect,
+        ...withoutRuntimeCaches(rawAspect),
+        memory: durableMemory(rawAspect.memory),
         tools,
         toolsReviewed: !hasTools
     };
@@ -397,12 +449,20 @@ export function sanitizeImportedAspect(rawAspect) {
 /** Parse a library file, returning normalized aspects or throwing. */
 export function parseLibrary(text) {
     const data = JSON.parse(text);
+    if (!Array.isArray(data) && data?.format !== undefined && data.format !== 'aspect-studio-library') {
+        throw new Error('Unsupported library format.');
+    }
+    if (!Array.isArray(data) && data?.version !== undefined && data.version !== 1) {
+        throw new Error('Unsupported library version.');
+    }
     const list = Array.isArray(data) ? data : data && data.aspects;
     if (!Array.isArray(list) || list.length === 0) {
         throw new Error('No Aspects found in that file.');
     }
+    if (list.some(a => !a || typeof a !== 'object' || Array.isArray(a))) {
+        throw new Error('Library contains invalid Aspect records.');
+    }
     return list
-        .filter(a => a && typeof a === 'object')
         .map(a => normalizeConversations(sanitizeImportedAspect(a)));
 }
 

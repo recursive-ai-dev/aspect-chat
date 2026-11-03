@@ -1,5 +1,6 @@
 import { cancelCreateAspect } from './aspects.js';
 import { state } from './state.js';
+import { normalizeNumericSetting } from './numericSettings.js';
 import {
     PROVIDERS,
     WEBLLM_PROVIDER,
@@ -20,6 +21,27 @@ export { fetchProviderModels };
  * ------------------------------------------------------------------ */
 
 const el = (id) => document.getElementById(id);
+
+// Each settings column owns one request. Both node identity and its current
+// values must still match before asynchronous work may change presentation.
+const discovery = new Map();
+function beginDiscovery(fallback = false) {
+    const prefix = fallback ? 'fallback' : 'api';
+    discovery.get(prefix)?.controller.abort();
+    const ids = [`${prefix}-provider-select`, `${prefix}-url-input`, `${prefix}-key-input`];
+    const controls = ids.map(id => ({ id, node: el(id), value: el(id)?.value }));
+    const request = {
+        controller: new AbortController(),
+        current: () => discovery.get(prefix) === request && controls.every(({ id, node, value }) => el(id) === node && node?.value === value)
+    };
+    discovery.set(prefix, request);
+    return request;
+}
+function invalidateDiscovery() {
+    for (const request of discovery.values()) request.controller.abort();
+    discovery.clear();
+}
+
 
 function setStatus(node, message, kind = 'info') {
     if (!node) return;
@@ -80,6 +102,7 @@ export function populateProviderSelect(selectId, includeNone) {
  * ------------------------------------------------------------------ */
 
 export function openSettings() {
+    invalidateDiscovery();
     const modal = el('settings-modal');
     if (!modal) return;
 
@@ -118,6 +141,7 @@ export function openSettings() {
 }
 
 export function closeSettings() {
+    invalidateDiscovery();
     const modal = el('settings-modal');
     if (modal) modal.classList.add('hidden');
 }
@@ -128,24 +152,19 @@ export function saveSettings() {
     s.apiUrl = el('api-url-input') ? el('api-url-input').value.trim() : s.apiUrl;
     s.apiKey = el('api-key-input') ? el('api-key-input').value.trim() : s.apiKey;
     s.model = el('api-model-input') ? el('api-model-input').value.trim() : s.model;
-    s.maxContext = parseInt(el('api-max-context-input')?.value, 10) || 20;
+    s.maxContext = normalizeNumericSetting('maxContext', el('api-max-context-input')?.value);
     s.rememberKey = el('remember-key-toggle') ? el('remember-key-toggle').checked : true;
-    s.contextTokens = Math.max(512, parseInt(el('context-tokens-input')?.value, 10) || s.contextTokens || 8192);
+    s.contextTokens = normalizeNumericSetting('contextTokens', el('context-tokens-input')?.value ?? s.contextTokens);
     s.toolCallingMode = el('tool-calling-mode')?.value || s.toolCallingMode || 'auto';
     s.semanticRetrieval = el('semantic-retrieval-toggle')?.checked ?? s.semanticRetrieval;
     s.embeddingDownloads = el('embedding-downloads-toggle')?.checked ?? s.embeddingDownloads;
-    s.retrievalTopK = Math.max(1, Math.min(10, parseInt(el('retrieval-top-k-input')?.value, 10) || s.retrievalTopK || 4));
+    s.retrievalTopK = normalizeNumericSetting('retrievalTopK', el('retrieval-top-k-input')?.value ?? s.retrievalTopK);
     for (const key of ['contextTokens', 'toolCallingMode', 'semanticRetrieval', 'embeddingDownloads', 'retrievalTopK']) safeSet(key, String(s[key]));
 
-    const timeoutSeconds = parseInt(el('tool-timeout-input')?.value, 10);
-    s.toolTimeoutMs = Number.isFinite(timeoutSeconds) && timeoutSeconds > 0
-        ? timeoutSeconds * 1000
-        : 30000;
+    const timeoutSeconds = el('tool-timeout-input')?.value;
+    s.toolTimeoutMs = normalizeNumericSetting('toolTimeoutMs', timeoutSeconds?.trim() ? Number(timeoutSeconds) * 1000 : undefined);
 
-    const maxKnowledge = parseInt(el('max-knowledge-chars-input')?.value, 10);
-    s.maxKnowledgeChars = Number.isFinite(maxKnowledge) && maxKnowledge > 0
-        ? maxKnowledge
-        : 100000;
+    s.maxKnowledgeChars = normalizeNumericSetting('maxKnowledgeChars', el('max-knowledge-chars-input')?.value);
 
     const providerSelect = el('api-provider-select');
     if (providerSelect) {
@@ -174,7 +193,10 @@ export function saveSettings() {
     if (s.rememberKey) {
         safeSet('apiKey', s.apiKey);
         safeSet('fallbackKey', s.fallbackKey);
-        try { sessionStorage.removeItem('apiKey'); } catch { /* ignore */ }
+        try {
+            sessionStorage.removeItem('apiKey');
+            sessionStorage.removeItem('fallbackKey');
+        } catch { /* ignore */ }
     } else {
         safeRemove('apiKey');
         safeRemove('fallbackKey');
@@ -182,6 +204,8 @@ export function saveSettings() {
         try {
             if (s.apiKey) sessionStorage.setItem('apiKey', s.apiKey);
             else sessionStorage.removeItem('apiKey');
+            if (s.fallbackKey) sessionStorage.setItem('fallbackKey', s.fallbackKey);
+            else sessionStorage.removeItem('fallbackKey');
         } catch { /* ignore */ }
     }
 
@@ -261,6 +285,7 @@ export function onProviderSelect() {
 }
 
 export function onFallbackProviderSelect() {
+    beginDiscovery(true);
     applyFallbackVisibility();
 
     const select = el('fallback-provider-select');
@@ -341,6 +366,7 @@ export function updateModelSelectUI(models, modelSelect, modelInput, statusDiv) 
 }
 
 async function loadWebLLMModelOptions(selectId, inputId, statusId) {
+    const request = beginDiscovery(selectId.startsWith('fallback'));
     const select = el(selectId);
     const input = el(inputId);
     const status = el(statusId);
@@ -349,9 +375,11 @@ async function loadWebLLMModelOptions(selectId, inputId, statusId) {
     setStatus(status, 'Loading the in-browser model catalogue…');
     try {
         const models = await getWebLLMModels();
+        if (!request.current()) return;
         updateModelSelectUI(models, select, input, status);
         setStatus(status, `${models.length} in-browser models available. The first run downloads the weights (typically 1–4 GB) and caches them.`, 'success');
     } catch (err) {
+        if (!request.current()) return;
         setStatus(status, `Could not load the WebLLM model list: ${err.message}`, 'error');
     }
 }
@@ -362,6 +390,7 @@ async function loadWebLLMModelOptions(selectId, inputId, statusId) {
  * quiet rather than reporting errors for a half-typed URL.
  */
 export async function fetchModelsIfPossible() {
+    const request = beginDiscovery();
     const url = el('api-url-input') ? el('api-url-input').value.trim() : '';
     const key = el('api-key-input') ? el('api-key-input').value.trim() : '';
     const statusDiv = el('model-fetch-status');
@@ -391,14 +420,17 @@ export async function fetchModelsIfPossible() {
 
     setStatus(statusDiv, 'Fetching models…');
     try {
-        const models = await fetchProviderModels(url, key);
+        const models = await fetchProviderModels(url, key, { signal: request.controller.signal });
+        if (!request.current()) return;
         updateModelSelectUI(models, modelSelect, modelInput, statusDiv);
     } catch (err) {
+        if (!request.current() || err.name === 'AbortError') return;
         setStatus(statusDiv, err.message, 'error');
     }
 }
 
 export async function fetchFallbackModels() {
+    const request = beginDiscovery(true);
     const select = el('fallback-provider-select');
     if (!select || !select.value || select.value === WEBLLM_PROVIDER) return;
 
@@ -416,9 +448,11 @@ export async function fetchFallbackModels() {
 
     setStatus(status, 'Fetching models…');
     try {
-        const models = await fetchProviderModels(url, key);
+        const models = await fetchProviderModels(url, key, { signal: request.controller.signal });
+        if (!request.current()) return;
         updateModelSelectUI(models, modelSelect, modelInput, status);
     } catch (err) {
+        if (!request.current() || err.name === 'AbortError') return;
         setStatus(status, err.message, 'error');
     }
 }
@@ -435,6 +469,7 @@ export async function fetchFallbackModels() {
  * the browser", which the chat view alone cannot tell you.
  */
 export async function testPrimaryConnection() {
+    const request = beginDiscovery();
     const button = el('test-connection-btn');
     const status = el('model-fetch-status');
     const providerSelect = el('api-provider-select');
@@ -458,7 +493,8 @@ export async function testPrimaryConnection() {
     setStatus(status, 'Contacting the endpoint…');
 
     try {
-        const result = await testConnection(url, key);
+        const result = await testConnection(url, key, { signal: request.controller.signal });
+        if (!request.current()) return;
         setStatus(status, result.message, result.ok ? 'success' : 'error');
 
         if (result.ok && result.models && result.models.length) {
@@ -478,6 +514,7 @@ export async function testPrimaryConnection() {
 }
 
 export async function testFallbackConnection() {
+    const request = beginDiscovery(true);
     const select = el('fallback-provider-select');
     const status = el('fallback-model-fetch-status');
     if (!select || !select.value) {
@@ -499,7 +536,8 @@ export async function testFallbackConnection() {
     const url = el('fallback-url-input') ? el('fallback-url-input').value.trim() : '';
     const key = el('fallback-key-input') ? el('fallback-key-input').value.trim() : '';
     setStatus(status, 'Contacting the endpoint…');
-    const result = await testConnection(url, key);
+    const result = await testConnection(url, key, { signal: request.controller.signal });
+    if (!request.current()) return;
     setStatus(status, result.message, result.ok ? 'success' : 'error');
 }
 

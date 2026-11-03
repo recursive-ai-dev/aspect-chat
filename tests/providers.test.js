@@ -238,3 +238,41 @@ describe('testConnection', () => {
         expect(typeof result.message).toBe('string');
     });
 });
+
+describe('bounded adversarial model discovery', () => {
+    afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+    it('discards malformed entries and deduplicates valid IDs', async () => {
+        vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ data: [null, false, 2, {}, { id: 7 }, '  valid  ', { name: 'valid' }, { model: 'other' }] }));
+        await expect(fetchProviderModels('http://localhost/v1', '')).resolves.toEqual(['valid', 'other']);
+    });
+    it('rejects lists without usable model IDs', async () => {
+        vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ models: [null, {}, { id: false }] }));
+        await expect(fetchProviderModels('http://localhost/v1', '')).rejects.toThrow('No models found');
+    });
+    it('times out a stalled response and releases its abort listener', async () => {
+        vi.useFakeTimers();
+        let networkSignal;
+        vi.spyOn(globalThis, 'fetch').mockImplementation((_url, { signal }) => new Promise((_resolve, reject) => {
+            networkSignal = signal;
+            signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+        }));
+        const controller = new AbortController();
+        const remove = vi.spyOn(controller.signal, 'removeEventListener');
+        const promise = fetchProviderModels('http://localhost/v1', '', { timeoutMs: 50, signal: controller.signal });
+        const assertion = expect(promise).rejects.toThrow('timed out');
+        await vi.advanceTimersByTimeAsync(50);
+        await assertion;
+        expect(networkSignal.aborted).toBe(true);
+        expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+        expect(vi.getTimerCount()).toBe(0);
+    });
+    it('propagates external cancellation without waiting for its timeout', async () => {
+        vi.spyOn(globalThis, 'fetch').mockImplementation((_url, { signal }) => new Promise((_resolve, reject) => {
+            signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+        }));
+        const controller = new AbortController();
+        const promise = fetchProviderModels('http://localhost/v1', '', { signal: controller.signal });
+        controller.abort();
+        await expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+    });
+});

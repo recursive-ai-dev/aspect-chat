@@ -168,3 +168,23 @@ describe('F-08 — Multibyte UTF-8 trailing chunk flushing', () => {
         expect(received).toEqual(['text']);
     });
 });
+
+describe('protocol terminal events', () => {
+    it('ends SSE without another read, ignoring content following DONE', async () => {
+        const reader = { read: vi.fn().mockResolvedValueOnce({ done: false, value: new TextEncoder().encode(
+            sseData('final') + 'data: [DONE]\n\n' + sseData('injected')
+        ) }).mockRejectedValue(new Error('read after termination')) };
+        await expect(readSSEStream(reader)).resolves.toBe('final');
+        expect(reader.read).toHaveBeenCalledTimes(1);
+    });
+    it('preserves final Ollama content and tool calls without another read', async () => {
+        const { readOllamaStream } = await import('../src/js/modules/llm.js');
+        const tool = vi.fn();
+        const reader = { read: vi.fn().mockResolvedValueOnce({ done: false, value: new TextEncoder().encode(
+            JSON.stringify({ done: true, message: { content: 'final 🔥', tool_calls: [{ function: { name: 'Test', arguments: { x: 1 } } }] } }) + '\n{"error":"after done"}\n'
+        ) }).mockRejectedValue(new Error('read after termination')) };
+        await expect(readOllamaStream(reader, undefined, tool)).resolves.toBe('final 🔥');
+        expect(reader.read).toHaveBeenCalledTimes(1);
+        expect(tool).toHaveBeenCalledWith([{ name: 'Test', args: '{"x":1}' }]);
+    });
+});

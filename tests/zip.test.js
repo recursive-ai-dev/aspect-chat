@@ -1,551 +1,261 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { loadAspectFile, saveAspectToFile, exportAspectToWebpage } from '../src/js/modules/zip.js';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import JSZip from 'jszip';
-import { getCurrentAspect, renderAspectList } from '../src/js/modules/aspects.js';
-import { markChangesSaved, state } from '../src/js/modules/state.js';
+import { loadAspectFile, saveAspectToFile, exportAspectToWebpage, resolveImportedToolNames, MAX_ASPECT_FILE_SIZE } from '../src/js/modules/zip.js';
+import { normalizeAspect, getCurrentAspect, renderAspectList } from '../src/js/modules/aspects.js';
+import { markChangesSaved, flushAspects, state } from '../src/js/modules/state.js';
 import { showChatView } from '../src/js/modules/ui.js';
-import { saveKnowledgeFile, getKnowledgeFilesRaw } from '../src/js/modules/db.js';
+import { commitImportedAspect, getKnowledgeFilesRaw } from '../src/js/modules/db.js';
+import { saveBlob } from '../src/js/modules/download.js';
+import { armPersistence, disarmPersistence } from '../src/js/modules/persist.js';
 
-vi.mock('../src/js/modules/db.js', () => ({
-    saveKnowledgeFile: vi.fn(),
-    getKnowledgeFilesRaw: vi.fn()
-}));
+vi.mock('../src/js/modules/db.js', () => ({ commitImportedAspect: vi.fn(), getKnowledgeFilesRaw: vi.fn() }));
+vi.mock('../src/js/modules/download.js', () => ({ saveBlob: vi.fn() }));
+vi.mock('../src/js/modules/aspects.js', async original => ({ ...(await original()), getCurrentAspect: vi.fn(), renderAspectList: vi.fn() }));
+vi.mock('../src/js/modules/state.js', () => ({ markChangesSaved: vi.fn(), flushAspects: vi.fn(), state: { aspects: [], currentAspectId: null, isGenerating: false, libraryBusy: false } }));
+vi.mock('../src/js/modules/ui.js', () => ({ showChatView: vi.fn(), applyAspectBackground: vi.fn() }));
 
-vi.mock('jszip', () => {
-    const mockJSZip = vi.fn(function() {
-        this.file = vi.fn();
-        this.folder = vi.fn(() => ({ file: vi.fn(), files: {} }));
-        this.generateAsync = vi.fn().mockResolvedValue(new Blob(['dummy zip'], { type: 'application/zip' }));
-    });
-    mockJSZip.loadAsync = vi.fn();
-    return { default: mockJSZip };
+// Real JSZip fixtures replace the old async()-only mocks. These assertions
+// exercise actual compression, bounded streaming, folder scoping and persistence.
+async function importZip(files = {}, options = {}) {
+    const zip = new JSZip();
+    for (const [path, content] of Object.entries(files)) zip.file(path, content);
+    const bytes = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', ...options });
+    const event = { target: { files: [bytes], value: 'test.aspect' } };
+    await loadAspectFile(event);
+    expect(event.target.value).toBe('');
+    return bytes;
+}
+const readBlob = blob => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsArrayBuffer(blob);
 });
 
-vi.mock('../src/js/modules/aspects.js', async (orig) => ({
-    // normalizeAspect / sanitizeToolName / hash helpers are real: import must
-    // produce a fully-formed Aspect and these tests assert on that shape.
-    ...(await orig()),
-    getCurrentAspect: vi.fn(),
-    renderAspectList: vi.fn(),
-}));
-
-vi.mock('../src/js/modules/state.js', () => ({
-    markChangesSaved: vi.fn(),
-    state: {
-        aspects: [],
-        currentAspectId: null
-    }
-}));
-
-vi.mock('../src/js/modules/ui.js', () => ({
-    showChatView: vi.fn(),
-    applyAspectBackground: vi.fn()
-}));
-
-vi.mock('../src/js/modules/db.js', () => ({
-    saveKnowledgeFile: vi.fn(),
-    getKnowledgeFilesRaw: vi.fn()
-}));
-
-describe('Zip Module', () => {
+describe('ZIP imports and exports', () => {
     beforeEach(() => {
+        vi.clearAllMocks();
+        armPersistence();
         window.showToast = vi.fn();
-        console.error = vi.fn();
-
-        // Mock DOM globals
-        global.URL.createObjectURL = vi.fn(() => 'mock-url');
-        global.URL.revokeObjectURL = vi.fn();
-        global.Blob = class { constructor(content, options) { this.content = content; this.options = options; } };
-
-        // Mock anchor element
-        const mockAnchor = {
-            href: '',
-            download: '',
-            click: vi.fn()
-        };
-        const originalCreateElement = document.createElement.bind(document);
-        vi.spyOn(document, 'createElement').mockImplementation((tagName) => {
-            if (tagName === 'a') return mockAnchor;
-            return originalCreateElement(tagName);
-        });
-
-        // Reset state
+        vi.spyOn(console, 'error').mockImplementation(() => {});
         state.aspects = [];
         state.currentAspectId = null;
+        state.isGenerating = false;
+        state.libraryBusy = false;
+        commitImportedAspect.mockResolvedValue(undefined);
+        flushAspects.mockResolvedValue(undefined);
+        getKnowledgeFilesRaw.mockResolvedValue([]);
+        saveBlob.mockResolvedValue(true);
     });
 
-    afterEach(() => {
-        vi.restoreAllMocks();
-    });
-
-    it('handles bad zip format when loading aspect file', async () => {
-        const mockError = new Error('Corrupted zip');
-        JSZip.loadAsync.mockRejectedValue(mockError);
-
-        const mockFile = new File([''], 'bad.aspect');
-        const event = {
-            target: {
-                files: [mockFile],
-                value: 'some/path.aspect'
-            }
-        };
-
+    it('rejects corrupt and compressed-upload-oversized files without changing state', async () => {
+        const event = { target: { files: [new Uint8Array([0, 1, 2])], value: 'bad.aspect' } };
         await loadAspectFile(event);
-
-        expect(JSZip.loadAsync).toHaveBeenCalledWith(mockFile);
-        expect(console.error).toHaveBeenCalledWith('Error loading .aspect file', mockError);
-        expect(window.showToast).toHaveBeenCalledWith(`Error loading .aspect file: ${mockError.message}`, 'error');
+        expect(window.showToast).toHaveBeenCalledWith(expect.stringContaining('Error loading .aspect file'), 'error');
         expect(event.target.value).toBe('');
+        await loadAspectFile({ target: { files: [{ size: MAX_ASPECT_FILE_SIZE + 1 }], value: '' } });
+        expect(window.showToast).toHaveBeenCalledWith('Aspect file exceeds the 50MB size limit.', 'error');
+        expect(state.aspects).toEqual([]);
+        expect(commitImportedAspect).not.toHaveBeenCalled();
+        expect(state.libraryBusy).toBe(false);
     });
 
-    it('loads aspect with Icon.b64 and handles bad JSON', async () => {
-        const mockZip = {
-            file: vi.fn((path) => {
-                if (path === 'Name.md') return { async: vi.fn().mockResolvedValue('Test Aspect') };
-                if (path === 'Description.md') return { async: vi.fn().mockResolvedValue('Desc') };
-                if (path === 'Instructions.md') return { async: vi.fn().mockResolvedValue('Inst') };
-                if (path === 'Icon.b64') return { async: vi.fn().mockResolvedValue('mock-b64-icon') };
-                if (path === 'memory.json') return { async: vi.fn().mockResolvedValue('invalid-json') };
-                return null;
-            }),
-            folder: vi.fn((path) => {
-                if (path === 'Tools') {
-                    return {
-                        file: vi.fn((file) => {
-                            if (file === 'state.json') return { async: vi.fn().mockResolvedValue('invalid-state') };
-                            return null;
-                        }),
-                        files: {
-                            'Tools/Tool1.js': { dir: false, async: vi.fn().mockResolvedValue('console.log("t1");') }
-                        }
-                    };
-                }
-                return null;
-            })
-        };
-        JSZip.loadAsync.mockResolvedValue(mockZip);
-
-        const event = { target: { files: [new File([''], 'test.aspect')], value: '' } };
-        
-        // This should not throw, it should catch the JSON parses and log errors
-        await loadAspectFile(event);
-
-        expect(console.error).toHaveBeenCalledWith('Failed to parse tool state.json during aspect import', expect.any(String));
-        expect(console.error).toHaveBeenCalledWith('Failed to parse memory.json during aspect import', expect.any(String));
-        
-        const addedAspect = state.aspects[0];
-        expect(addedAspect.icon).toBe('data:image/png;base64,mock-b64-icon');
-        expect(addedAspect.memory).toEqual({});
-        expect(addedAspect.tools[0].state).toEqual({});
-    });
-
-    it('saves aspect to file successfully', async () => {
-        const mockAspect = {
-            name: 'Test Aspect!',
-            description: 'Test Desc',
-            instructions: 'Test Instr',
-            knowledge: 'Test Knowledge',
-            icon: 'data:image/png;base64,iVBORw0KGgo=',
-            background: 'data:image/jpeg;base64,/9j/4AAQSkZJRg==',
-            chatHistory: [],
-            tools: []
-        };
-        getCurrentAspect.mockReturnValue(mockAspect);
-
-        const mockZipFile = vi.fn();
-        const mockGenerateAsync = vi.fn().mockResolvedValue(new Blob(['mock-blob-data']));
-
-        JSZip.mockImplementationOnce(function() {
-            this.file = mockZipFile;
-            this.folder = vi.fn(() => ({ file: mockZipFile, files: {} }));
-            this.generateAsync = mockGenerateAsync;
+    it('imports metadata, binary images, Windows paths and scoped knowledge atomically', async () => {
+        await importZip({
+            'Name.md': 'Loaded Name', 'Description.md': 'Loaded Desc', 'Instructions.md': 'Loaded Instr',
+            'Knowledge/KnowledgeFile.md': 'Loaded Knowledge', 'Knowledge\\Files\\nested\\notes.txt': 'win notes',
+            'Knowledge/Files/doc1.txt': 'doc content', 'Icon.png': new Uint8Array([1, 2, 3]),
+            'Background.png': new Uint8Array([4, 5, 6]), 'memory.json': '{"mem1":"val1","~secret":"session"}',
+            'Tools\\nested\\custom_tool.js': 'console.log("win tool");',
+            'Tools/state.json': '{"custom_tool.js":{"on":true}}',
+            'Elsewhere/ignored.js': 'never a tool', 'ImagePack/notanimage.txt': 'not a background',
+            'ChatHistory/History.md': '# History\n\n### User\nHello\n\n### Assistant\nHi'
         });
-
-        await saveAspectToFile();
-
-        expect(mockZipFile).toHaveBeenCalledWith('Name.md', mockAspect.name);
-        expect(mockZipFile).toHaveBeenCalledWith('Description.md', mockAspect.description);
-        expect(mockZipFile).toHaveBeenCalledWith('Instructions.md', mockAspect.instructions);
-        expect(mockZipFile).toHaveBeenCalledWith('Knowledge/KnowledgeFile.md', mockAspect.knowledge);
-        expect(mockZipFile).toHaveBeenCalledWith('Icon.png', 'iVBORw0KGgo=', { base64: true });
-        expect(mockZipFile).toHaveBeenCalledWith('Background.jpeg', '/9j/4AAQSkZJRg==', { base64: true });
-        expect(mockGenerateAsync).toHaveBeenCalledWith({ type: 'blob' });
-        expect(global.URL.createObjectURL).toHaveBeenCalled();
-        expect(markChangesSaved).toHaveBeenCalled();
-    });
-
-    it('saves aspect to file with preset background and no tools or memory', async () => {
-        const mockAspect = {
-            name: 'Simple Aspect',
-            description: 'Test Desc',
-            instructions: 'Test Instr',
-            background: 'lake_sunset_001.jpeg', // Not base64
-            chatHistory: [{role:'user',content:'hi'}]
-        };
-        getCurrentAspect.mockReturnValue(mockAspect);
-        
-        global.fetch = vi.fn().mockResolvedValue({
-            ok: true,
-            blob: vi.fn().mockResolvedValue(new Blob(['bg-data']))
-        });
-
-        const mockZipFile = vi.fn();
-        const mockGenerateAsync = vi.fn().mockResolvedValue(new Blob(['mock-blob-data']));
-
-        JSZip.mockImplementationOnce(function() {
-            this.file = mockZipFile;
-            this.folder = vi.fn(() => ({ file: mockZipFile, files: {} }));
-            this.generateAsync = mockGenerateAsync;
-        });
-
-        await saveAspectToFile();
-
-        expect(mockZipFile).toHaveBeenCalledWith('Background.jpeg', expect.any(Blob));
-        expect(mockZipFile).toHaveBeenCalledWith('ChatHistory/History.md', '### User\nhi\n\n');
-        expect(mockZipFile).toHaveBeenCalledWith('memory.json', '{}');
-    });
-
-    it('loads aspect file successfully', async () => {
-        const mockZip = {
-            file: vi.fn((path) => {
-                const files = {
-                    'Name.md': { async: vi.fn().mockResolvedValue('Loaded Name') },
-                    'Description.md': { async: vi.fn().mockResolvedValue('Loaded Desc') },
-                    'Instructions.md': { async: vi.fn().mockResolvedValue('Loaded Instr') },
-                    'Knowledge/KnowledgeFile.md': { async: vi.fn().mockResolvedValue('Loaded Knowledge') },
-                    'Icon.png': { async: vi.fn().mockResolvedValue('iVBORw0KGgo=') },
-                    'Background.jpeg': { async: vi.fn().mockResolvedValue('/9j/4AAQSkZJRg==') },
-                    'memory.json': { async: vi.fn().mockResolvedValue('{"mem1":"val1"}') },
-                    'ChatHistory/History.md': { async: vi.fn().mockResolvedValue('# History\n\n### User\nHello\n\n### Assistant\nHi') }
-                };
-                return files[path];
-            }),
-            folder: vi.fn((path) => {
-                if (path === 'Tools') {
-                    return {
-                        file: vi.fn((name) => {
-                            if (name === 'state.json') {
-                                return { async: vi.fn().mockResolvedValue('{"tool1.js":{"on":true}}') };
-                            }
-                            return null;
-                        }),
-                        files: {
-                            'Tools/tool1.js': { dir: false, async: vi.fn().mockResolvedValue('console.log("tool1");') },
-                            'Tools/subdir': { dir: true }
-                        }
-                    };
-                }
-                if (path === 'Knowledge/Files') {
-                    return {
-                        files: {
-                            'Knowledge/Files/doc1.txt': { dir: false, async: vi.fn().mockResolvedValue('doc content') }
-                        }
-                    };
-                }
-                return null;
-            })
-        };
-
-        JSZip.loadAsync.mockResolvedValue(mockZip);
-
-        const mockFile = new File(['dummy content'], 'test.aspect');
-        const event = {
-            target: {
-                files: [mockFile],
-                value: 'some/path.aspect'
-            }
-        };
-
-        await loadAspectFile(event);
-
-        expect(JSZip.loadAsync).toHaveBeenCalledWith(mockFile);
-
-        expect(state.aspects.length).toBe(1);
-        const loadedAspect = state.aspects[0];
-        expect(loadedAspect.name).toBe('Loaded Name');
-        expect(loadedAspect.description).toBe('Loaded Desc');
-        expect(loadedAspect.instructions).toBe('Loaded Instr');
-        expect(loadedAspect.knowledge).toBe('Loaded Knowledge');
-        expect(loadedAspect.icon).toBe('data:image/png;base64,iVBORw0KGgo=');
-        expect(loadedAspect.background).toBe('data:image/jpeg;base64,/9j/4AAQSkZJRg==');
-        expect(loadedAspect.memory).toEqual({ mem1: 'val1' });
-        expect(loadedAspect.chatHistory).toEqual([
-            { role: 'user', content: 'Hello' },
-            { role: 'assistant', content: 'Hi' }
-        ]);
-        expect(loadedAspect.tools).toEqual([
-            { name: 'tool1.js', code: 'console.log("tool1");', state: { on: true } }
-        ]);
-
+        const aspect = state.aspects[0];
+        expect(aspect).toMatchObject({ name: 'Loaded Name', description: 'Loaded Desc', instructions: 'Loaded Instr', knowledge: 'Loaded Knowledge',
+            icon: 'data:image/png;base64,AQID', background: 'data:image/png;base64,BAUG', memory: { mem1: 'val1' }, toolsReviewed: false });
+        expect(aspect.chatHistory).toEqual([{ role: 'user', content: 'Hello' }, { role: 'assistant', content: 'Hi' }]);
+        expect(aspect.tools).toEqual([{ name: 'custom_tool.js', code: 'console.log("win tool");', state: { on: true } }]);
+        expect(commitImportedAspect).toHaveBeenCalledWith(expect.objectContaining({ id: aspect.id, memory: { mem1: 'val1' } }),
+            [{ name: 'doc1.txt', text: 'doc content' }, { name: 'notes.txt', text: 'win notes' }]);
+        expect(flushAspects.mock.invocationCallOrder[0]).toBeLessThan(commitImportedAspect.mock.invocationCallOrder[0]);
+        expect(state.currentAspectId).toBe(aspect.id);
         expect(renderAspectList).toHaveBeenCalled();
         expect(showChatView).toHaveBeenCalled();
         expect(markChangesSaved).toHaveBeenCalled();
-        expect(event.target.value).toBe('');
+        expect(window.showToast).toHaveBeenCalledWith(expect.stringContaining('left DISABLED'), 'error');
+        expect(state.libraryBusy).toBe(false);
     });
 
-    it('loads aspect file missing optional fields gracefully', async () => {
-        const mockZip = {
-            file: vi.fn((path) => {
-                const files = {
-                    'Name.md': { async: vi.fn().mockResolvedValue('Loaded Name') },
-                    'Description.md': { async: vi.fn().mockResolvedValue('Loaded Desc') },
-                    'Instructions.md': { async: vi.fn().mockResolvedValue('Loaded Instr') },
-                };
-                return files[path] || null;
-            }),
-            folder: vi.fn(() => null)
-        };
-
-        JSZip.loadAsync.mockResolvedValue(mockZip);
-
-        const mockFile = new File(['dummy content'], 'minimal.aspect');
-        const event = {
-            target: { files: [mockFile], value: 'minimal.aspect' }
-        };
-
-        await loadAspectFile(event);
-
-        expect(state.aspects.length).toBe(1); // Cleared in beforeEach
-        const loadedAspect = state.aspects[0];
-        expect(loadedAspect.name).toBe('Loaded Name');
-        expect(loadedAspect.icon).toBe('');
-        expect(loadedAspect.background).toBe('');
-        expect(loadedAspect.tools).toEqual([]);
-        expect(loadedAspect.chatHistory).toEqual([]);
-        expect(loadedAspect.knowledge).toBe('');
+    it('imports missing optional metadata, legacy b64 icons and malformed JSON safely', async () => {
+        await importZip({ 'Description.md': 'Desc', 'Icon.b64': 'AQID', 'memory.json': 'broken', 'Tools/state.json': 'broken', 'Tools/tool.js': 'return 1;' });
+        expect(state.aspects[0]).toMatchObject({ name: 'Imported Aspect', description: 'Desc', knowledge: '', background: '', icon: 'data:image/png;base64,AQID', memory: {} });
+        expect(state.aspects[0].tools[0].state).toEqual({});
+        expect(console.error).toHaveBeenCalledWith('Failed to parse tool state.json during aspect import', expect.any(String));
+        expect(console.error).toHaveBeenCalledWith('Failed to parse memory.json during aspect import', expect.any(String));
     });
 
-    it('exports aspect to webpage successfully', async () => {
-        const mockAspect = {
-            name: 'Web Aspect',
-            description: 'Web Desc',
-            instructions: 'Web Instr <test>',
-            icon: 'data:image/png;base64,abc'
-        };
-        getCurrentAspect.mockReturnValue(mockAspect);
-
-        await exportAspectToWebpage();
-
-        expect(global.URL.createObjectURL).toHaveBeenCalled();
-        expect(window.showToast).toHaveBeenCalledWith("Webpage Exported Successfully!", "success");
-
-        // Verify anchor element operations via DOM mock
-        const mockAnchor = document.createElement('a');
-        expect(mockAnchor.href).toBe('mock-url');
-        expect(mockAnchor.download).toBe('Web_Aspect_card.html');
-        expect(mockAnchor.click).toHaveBeenCalled();
-        expect(global.URL.revokeObjectURL).toHaveBeenCalledWith('mock-url');
+    it('rekeys imported conversations and excludes malformed records/messages', async () => {
+        await importZip({ 'ChatHistory/conversations.json': JSON.stringify({ activeConversationId: 'old2', conversations: [null,
+            { id: 'old1', title: 'One', messages: [{ role: 'system', content: 'bad' }, null] },
+            { id: 'old2', title: 'Two', messages: [{ role: 'assistant', content: 'keep' }] }] }) });
+        const aspect = state.aspects[0];
+        expect(aspect.conversations).toHaveLength(2);
+        expect(aspect.conversations.every(conv => !['old1', 'old2'].includes(conv.id))).toBe(true);
+        expect(aspect.activeConversationId).toBe(aspect.conversations[1].id);
+        expect(aspect.chatHistory).toEqual([{ role: 'assistant', content: 'keep' }]);
     });
 
-    it('should handle missing essential metadata files', async () => {
-        const file = new File(['mock content'], 'test.aspect');
-        const event = { target: { files: [file] } };
-
-        const mockZip = {
-            file: vi.fn((path) => {
-                // Name.md is missing
-                if (path === 'Description.md') return { async: vi.fn().mockResolvedValue('Desc') };
-                if (path === 'Instructions.md') return { async: vi.fn().mockResolvedValue('Instr') };
-                return null;
-            })
-        };
-        JSZip.loadAsync.mockResolvedValue(mockZip);
-
-        await loadAspectFile(event);
-
-        // Test updated to reflect graceful degradation; the file continues parsing rather than throwing
-        // Mock zip.folder for subsequent operations
-        mockZip.folder = vi.fn().mockReturnValue(null);
-        await loadAspectFile(event);
-        // It shouldn't crash with the metadata error anymore
+    it('retains previous library and selection on atomic persistence failure', async () => {
+        const previous = normalizeAspect({ id: 'original', name: 'Existing' });
+        state.aspects = [previous];
+        state.currentAspectId = previous.id;
+        commitImportedAspect.mockRejectedValueOnce(new Error('Quota exceeded'));
+        await importZip({ 'Name.md': 'New', 'Knowledge/Files/a.txt': 'a', 'Knowledge/Files/b.txt': 'b' });
+        expect(state.aspects).toEqual([previous]);
+        expect(state.currentAspectId).toBe('original');
+        expect(markChangesSaved).not.toHaveBeenCalled();
+        expect(showChatView).not.toHaveBeenCalled();
+        expect(state.libraryBusy).toBe(false);
+        expect(window.showToast).toHaveBeenCalledWith('Error loading .aspect file: Quota exceeded', 'error');
     });
 
-    it('should ignore non-image files in ImagePack/', async () => {
-        const file = new File(['mock content'], 'test.aspect');
-        const event = { target: { files: [file] } };
-
-        const mockZip = {
-            file: vi.fn((path) => {
-                if (path === 'Name.md') return { async: vi.fn().mockResolvedValue('Name') };
-                if (path === 'Description.md') return { async: vi.fn().mockResolvedValue('Desc') };
-                if (path === 'Instructions.md') return { async: vi.fn().mockResolvedValue('Instr') };
-                if (path === 'Icon.b64') return null; // No icon
-                return null;
-            }),
-            folder: vi.fn((path) => {
-                if (path === 'ImagePack') {
-                    return {
-                        file: vi.fn(/.*\.(jpeg|jpg|png|gif|webp)$/i),
-                        forEach: vi.fn((cb) => {
-                            cb('notanimage.txt', { async: vi.fn().mockResolvedValue('text') });
-                            cb('valid.png', { async: vi.fn().mockResolvedValue('base64') });
-                        })
-                    };
-                }
-                return null;
-            })
-        };
-        JSZip.loadAsync.mockResolvedValue(mockZip);
-
-        await loadAspectFile(event);
-        
-        const loadedAspect = state.aspects[0];
-        expect(loadedAspect.background).toBe(''); // Image is mockResolvedValue
+    it('refuses imports into read-only recovery without bypassing persistence guards', async () => {
+        disarmPersistence(new Error('Unreadable library'));
+        await importZip({ 'Name.md': 'New' });
+        expect(commitImportedAspect).not.toHaveBeenCalled();
+        expect(state.aspects).toEqual([]);
+        expect(window.showToast).toHaveBeenCalledWith(expect.stringContaining('read-only'), 'error');
     });
 
-    it('should export aspect with tools and knowledge', async () => {
-        // Setup aspect with tools and knowledge
-        const aspect = {
-            id: '1',
-            name: 'Tool Aspect',
-            tools: [
-                { name: 'Tool1.js', code: 'console.log()', state: { val: 1 } },
-                { name: 'Tool2.js', code: 'console.log()' } // No state
-            ],
-            chatHistory: [],
-            memory: { key: 'value' }
-        };
-        getCurrentAspect.mockReturnValue(aspect);
-        
-        // Mock getKnowledgeFilesRaw to return fake knowledge files
-        getKnowledgeFilesRaw.mockResolvedValue([
-            { name: 'file1.txt', text: 'Knowledge 1' }
-        ]);
-
-        const mockToolsFolderFile = vi.fn();
-        const mockKnowledgeFolderFile = vi.fn();
-        const mockRootFile = vi.fn();
-        const mockGenerateAsync = vi.fn().mockResolvedValue(new Blob(['mock-blob']));
-        
-        JSZip.mockImplementationOnce(function() {
-            this.file = mockRootFile;
-            this.folder = vi.fn((name) => {
-                if (name === 'Tools') return { file: mockToolsFolderFile };
-                if (name === 'Knowledge/Files') return { file: mockKnowledgeFolderFile };
-                return { file: vi.fn() };
-            });
-            this.generateAsync = mockGenerateAsync;
-        });
-
+    it('bounds export filenames for long and non-Latin Aspect names', async () => {
+        getCurrentAspect.mockReturnValue(normalizeAspect({ name: '人物'.repeat(200) }));
         await saveAspectToFile();
-
-        expect(JSZip).toHaveBeenCalled();
-
-        // Verify tools
-        expect(mockToolsFolderFile).toHaveBeenCalledWith('Tool1.js', 'console.log()');
-        expect(mockToolsFolderFile).toHaveBeenCalledWith('Tool2.js', 'console.log()');
-        expect(mockToolsFolderFile).toHaveBeenCalledWith('state.json', JSON.stringify({ 'Tool1.js': { val: 1 } }, null, 2));
-
-        // Verify knowledge files
-        expect(mockKnowledgeFolderFile).toHaveBeenCalledWith('file1.txt', 'Knowledge 1');
+        expect(saveBlob.mock.calls[0][1].length).toBeLessThanOrEqual(180);
+        expect(saveBlob.mock.calls[0][1]).toMatch(/\.aspect$/);
     });
 
-    it('rejects files exceeding MAX_ASPECT_FILE_SIZE (50MB)', async () => {
-        const mockFile = new File([''], 'huge.aspect');
-        Object.defineProperty(mockFile, 'size', { value: 60 * 1024 * 1024 });
-        const event = {
-            target: {
-                files: [mockFile],
-                value: 'huge.aspect'
-            }
-        };
-
-        await loadAspectFile(event);
-
-        expect(window.showToast).toHaveBeenCalledWith('Aspect file exceeds the 50MB size limit.', 'error');
-        expect(event.target.value).toBe('');
+    it('reports a presentation failure separately after a successful durable import', async () => {
+        renderAspectList.mockImplementationOnce(() => { throw new Error('View refresh failed'); });
+        await importZip({ 'Name.md': 'Saved' });
+        expect(commitImportedAspect).toHaveBeenCalledTimes(1);
+        expect(state.aspects[0].name).toBe('Saved');
+        expect(state.currentAspectId).toBe(state.aspects[0].id);
+        expect(window.showToast).toHaveBeenCalledWith('The imported Aspect was saved, but the view could not refresh. Reload to display it.', 'error');
+        expect(state.libraryBusy).toBe(false);
     });
 
-    it('normalizes Windows backslashes in tool and knowledge file paths', async () => {
-        const mockZip = {
-            file: vi.fn((path) => {
-                if (path === 'Name.md') return { async: vi.fn().mockResolvedValue('Windows Zip') };
-                return null;
-            }),
-            folder: vi.fn((path) => {
-                if (path === 'Tools') {
-                    return {
-                        file: vi.fn(() => null),
-                        files: {
-                            'Tools\\nested\\custom_tool.js': {
-                                dir: false,
-                                async: vi.fn().mockResolvedValue('console.log("win tool");')
-                            }
-                        }
-                    };
-                }
-                if (path === 'Knowledge/Files') {
-                    return {
-                        files: {
-                            'Knowledge\\Files\\nested\\notes.txt': {
-                                dir: false,
-                                async: vi.fn().mockResolvedValue('win notes')
-                            }
-                        }
-                    };
-                }
-                return null;
-            })
-        };
-
-        JSZip.loadAsync.mockResolvedValueOnce(mockZip);
-
-        const mockFile = new File(['content'], 'windows.aspect');
-        const event = { target: { files: [mockFile], value: 'windows.aspect' } };
-
-        await loadAspectFile(event);
-
-        expect(state.aspects.length).toBe(1);
-        expect(state.aspects[0].tools[0].name).toBe('custom_tool.js');
-        expect(saveKnowledgeFile).toHaveBeenCalledWith(
-            state.aspects[0].id,
-            'notes.txt',
-            'win notes'
-        );
+    it('aborts before transaction when flushing pending writes fails', async () => {
+        flushAspects.mockRejectedValueOnce(new Error('Read-only storage'));
+        await importZip({ 'Name.md': 'New' });
+        expect(commitImportedAspect).not.toHaveBeenCalled();
+        expect(state.aspects).toEqual([]);
     });
 
-    it('supports Background.png with image/png mime', async () => {
-        const mockZip = {
-            file: vi.fn((path) => {
-                if (path === 'Name.md') return { async: vi.fn().mockResolvedValue('PNG Aspect') };
-                if (path === 'Background.png') return { async: vi.fn().mockResolvedValue('pngbase64data'), name: 'Background.png' };
-                return null;
-            }),
-            folder: vi.fn(() => null)
-        };
-        JSZip.loadAsync.mockResolvedValueOnce(mockZip);
-
-        const mockFile = new File(['content'], 'png.aspect');
-        const event = { target: { files: [mockFile], value: 'png.aspect' } };
-
-        await loadAspectFile(event);
-
-        expect(state.aspects.length).toBe(1);
-        expect(state.aspects[0].background).toBe('data:image/png;base64,pngbase64data');
+    it('refuses imports during generation or another library operation', async () => {
+        state.isGenerating = true;
+        await importZip({ 'Name.md': 'New' });
+        state.isGenerating = false;
+        state.libraryBusy = true;
+        await importZip({ 'Name.md': 'New' });
+        expect(commitImportedAspect).not.toHaveBeenCalled();
+        expect(state.aspects).toEqual([]);
+        expect(state.libraryBusy).toBe(true);
     });
 
-    it('omits broken img tag in webpage export when icon is empty', async () => {
-        let createdBlobContent = '';
-        const originalBlob = global.Blob;
-        global.Blob = class {
-            constructor(parts, options) {
-                createdBlobContent = parts.join('');
-                this.content = parts;
-                this.options = options;
-            }
-        };
+    it('takes the library operation lock before asynchronous reads and rejects concurrent import', async () => {
+        let finish;
+        flushAspects.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+        const zip = new JSZip().file('Name.md', 'New');
+        const file = await zip.generateAsync({ type: 'uint8array' });
+        const first = loadAspectFile({ target: { files: [file] } });
+        expect(state.libraryBusy).toBe(true);
+        await loadAspectFile({ target: { files: [file] } });
+        await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+        finish();
+        await first;
+        expect(state.aspects).toHaveLength(1);
+        expect(commitImportedAspect).toHaveBeenCalledTimes(1);
+        expect(state.libraryBusy).toBe(false);
+    });
 
-        getCurrentAspect.mockReturnValue({
-            name: 'No Icon Aspect',
-            description: 'Desc',
-            instructions: 'Instr',
-            icon: ''
-        });
+    it('rejects duplicate flattened knowledge names before transaction', async () => {
+        await importZip({ 'Knowledge/Files/a/notes.txt': 'one', 'Knowledge/Files/b/notes.txt': 'two' });
+        expect(commitImportedAspect).not.toHaveBeenCalled();
+        expect(state.aspects).toEqual([]);
+        expect(window.showToast).toHaveBeenCalledWith(expect.stringContaining('duplicate filenames'), 'error');
+    });
 
+    it('resolves reserved and duplicate tool names without trusting imported code', () => {
+        const tools = resolveImportedToolNames([{ name: 'Calculator.js' }, { name: 'nested.js' }, { name: 'NESTED.js' }]);
+        expect(tools.map(t => t.name.toLowerCase())).toEqual(['imported_calculator.js', 'nested.js', 'nested_2.js']);
+    });
+
+    it('exports complete portable archives with durable memory and raw knowledge', async () => {
+        const aspect = normalizeAspect({ id: 'one', name: 'Test Aspect!', description: 'Desc', instructions: 'Inst', knowledge: 'Knowledge',
+            icon: 'data:image/png;base64,AQID', background: 'data:image/jpeg;base64,BAUG', memory: { saved: 'keep', '~secret': 'omit' },
+            tools: [{ name: 'Tool.js', code: 'return 1;', state: { val: 1 } }], chatHistory: [{ role: 'user', content: 'hi' }] });
+        getCurrentAspect.mockReturnValue(aspect);
+        getKnowledgeFilesRaw.mockResolvedValueOnce([{ name: 'file.txt', text: 'Knowledge 1' }]);
+        await saveAspectToFile();
+        expect(saveBlob).toHaveBeenCalledWith(expect.any(Blob), 'Test_Aspect_.aspect', 'application/zip');
+        const zip = await JSZip.loadAsync(await readBlob(saveBlob.mock.calls[0][0]));
+        expect(await zip.file('Name.md').async('string')).toBe('Test Aspect!');
+        expect(await zip.file('Description.md').async('string')).toBe('Desc');
+        expect(await zip.file('Instructions.md').async('string')).toBe('Inst');
+        expect(await zip.file('Knowledge/KnowledgeFile.md').async('string')).toBe('Knowledge');
+        expect(await zip.file('Knowledge/Files/file.txt').async('string')).toBe('Knowledge 1');
+        expect(await zip.file('Tools/Tool.js').async('string')).toBe('return 1;');
+        expect(JSON.parse(await zip.file('Tools/state.json').async('string'))).toEqual({ 'Tool.js': { val: 1 } });
+        expect(JSON.parse(await zip.file('memory.json').async('string'))).toEqual({ saved: 'keep' });
+        expect(await zip.file('Icon.png').async('base64')).toBe('AQID');
+        expect(await zip.file('Background.jpeg').async('base64')).toBe('BAUG');
+        expect(await zip.file('ChatHistory/History.md').async('string')).toBe('### User\nhi\n\n');
+        expect(JSON.parse(await zip.file('ChatHistory/conversations.json').async('string')).conversations[0].messages).toEqual([{ role: 'user', content: 'hi' }]);
+        expect(markChangesSaved).toHaveBeenCalled();
+    });
+
+    it('exports a local preset background with no tools or memory', async () => {
+        const source = normalizeAspect({ name: 'Preset', background: 'alone_image_pack/preset.png' });
+        getCurrentAspect.mockReturnValue(source);
+        const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({ ok: true, blob: async () => new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }) });
+        try {
+            await saveAspectToFile();
+            const zip = await JSZip.loadAsync(await readBlob(saveBlob.mock.calls[0][0]));
+            expect(await zip.file('Background.png').async('base64')).toBe('AQID');
+            expect(JSON.parse(await zip.file('memory.json').async('string'))).toEqual({});
+            expect(zip.filter(path => path.startsWith('Tools/') && path.endsWith('.js'))).toEqual([]);
+            expect(markChangesSaved).toHaveBeenCalled();
+        } finally { fetch.mockRestore(); }
+    });
+
+    it('does not mark cancelled or failed exports saved', async () => {
+        getCurrentAspect.mockReturnValue(normalizeAspect({ name: 'Test' }));
+        saveBlob.mockResolvedValueOnce(false);
+        await saveAspectToFile();
+        saveBlob.mockRejectedValueOnce(new Error('Provider offline'));
+        await saveAspectToFile();
+        expect(markChangesSaved).not.toHaveBeenCalled();
+        expect(window.showToast).toHaveBeenCalledWith('Could not export Aspect: Provider offline', 'error');
+    });
+
+    it('exports escaped HTML and reports success only after save completion', async () => {
+        getCurrentAspect.mockReturnValue({ name: 'Web Aspect', description: '<script>alert(1)</script>', instructions: 'Instr <test>', icon: '' });
         await exportAspectToWebpage();
-
-        expect(createdBlobContent).not.toContain('<img class="icon"');
-        global.Blob = originalBlob;
+        const [blob, name, type] = saveBlob.mock.calls[0];
+        const html = new TextDecoder().decode(await readBlob(blob));
+        expect(name).toBe('Web_Aspect_card.html');
+        expect(type).toBe('text/html');
+        expect(html).toContain('&lt;script&gt;');
+        expect(html).toContain('Instr &lt;test&gt;');
+        expect(html).not.toContain('<img class="icon"');
+        expect(window.showToast).toHaveBeenCalledWith('Webpage Exported Successfully!', 'success');
+        window.showToast.mockClear();
+        saveBlob.mockResolvedValueOnce(false);
+        await exportAspectToWebpage();
+        expect(window.showToast).not.toHaveBeenCalled();
+        saveBlob.mockRejectedValueOnce(new Error('Write failed'));
+        await exportAspectToWebpage();
+        expect(window.showToast).toHaveBeenCalledWith('Could not export webpage: Write failed', 'error');
     });
 });
-

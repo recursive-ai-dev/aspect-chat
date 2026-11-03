@@ -2,6 +2,13 @@ export function sandboxBootstrap() {
     const channel = '__CHANNEL__';
     const send = (msg) => parent.postMessage(Object.assign({ channel }, msg), '*');
 
+    // Capacitor's legacy addJavascriptInterface bridge enters every frame,
+    // including opaque origins. Modern origin-restricted bridge injection
+    // leaves this sandbox without androidBridge. Reject before loading code.
+    let nativeBridgeExposed = true;
+    try { nativeBridgeExposed = typeof self.androidBridge !== 'undefined'; }
+    catch { /* Inaccessible bridge properties cannot establish safe isolation. */ }
+
     // Tool code and the system tools call self.postMessage(...) expecting it to
     // reach the host (Worker semantics). Route it to the parent instead.
     self.postMessage = send;
@@ -80,6 +87,10 @@ export function sandboxBootstrap() {
         // memoryWriteComplete / summonComplete are consumed by the system-tool
         // listeners themselves; nothing to do here.
         if (d.type !== 'init') return;
+        if (nativeBridgeExposed) {
+            send({ type: 'done', ok: false, error: 'Tools are disabled because this Android WebView exposes its native bridge inside sandbox frames. Update Android System WebView before running tools.' });
+            return;
+        }
 
         self.aspectMemory = d.memory || {};
         try {

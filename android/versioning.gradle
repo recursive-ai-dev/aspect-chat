@@ -1,0 +1,24 @@
+// Keep the same public version-code contract as scripts/android-config.mjs.
+ext.androidVersionCode = { String version, String override ->
+    def match = version =~ /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
+    if (!match.matches() || match[0][4]?.split('\\.')?.any { it ==~ /0\d+/ }) {
+        throw new GradleException('Android requires a valid semantic package version.')
+    }
+    if (override != null) {
+        if (!(override ==~ /[1-9]\d*/) || new BigInteger(override) > 2100000000G) {
+            throw new GradleException('versionCode/VERSION_CODE must be an integer from 1 to 2100000000.')
+        }
+        return override.toInteger()
+    }
+    if (version.contains('-') || version.contains('+')) {
+        throw new GradleException('Prerelease/build versions require an explicit versionCode/VERSION_CODE to preserve Android update ordering.')
+    }
+    def major = new BigInteger(match[0][1])
+    def minor = new BigInteger(match[0][2])
+    def patch = new BigInteger(match[0][3])
+    def code = major * 10000G + minor * 100G + patch
+    if (minor > 99G || patch > 99G || code < 1G || code > 2100000000G) {
+        throw new GradleException('Automatic Android version codes require minor/patch below 100 and a code from 1 to 2100000000; override versionCode explicitly.')
+    }
+    return code.toInteger()
+}
