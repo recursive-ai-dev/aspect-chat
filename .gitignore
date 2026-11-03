@@ -5,3 +5,8 @@ dist/
 coverage/
 .audit/
 release/
+
+# Android signing / outputs
+android/keystore.properties
+*.jks
+*.keystore

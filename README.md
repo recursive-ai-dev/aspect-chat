@@ -75,6 +75,10 @@ in API Settings and the engine's CORS configuration, or run the app locally.
 
 ---
 
+## Android
+
+Aspect Studio ships as an Android app (Capacitor WebView). `npm run android:debug` builds a sideloadable APK; `npm run android:bundle` builds the signed `.aab` for Google Play. Setup, signing and release steps: [ANDROID.md](ANDROID.md).
+
 ## Aspects
 
 An Aspect is a persona plus everything it needs to be useful:
